@@ -4,9 +4,15 @@ import axios from 'axios';
 import { useApp } from '../../contexts/AppContext';
 import { 
   LayoutDashboard, Users, Store, Package, Settings, LogOut,
-  CheckCircle, XCircle, TrendingUp, DollarSign, Clock
+  CheckCircle, XCircle, TrendingUp, DollarSign, Clock, Tag, Plus, Percent
 } from 'lucide-react';
 import { Button } from '../../components/ui/button';
+import { Input } from '../../components/ui/input';
+import { Label } from '../../components/ui/label';
+import { Switch } from '../../components/ui/switch';
+import { 
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger 
+} from '../../components/ui/dialog';
 import { toast } from 'sonner';
 
 export default function AdminDashboard() {
@@ -17,8 +23,19 @@ export default function AdminDashboard() {
   const [users, setUsers] = useState([]);
   const [restaurants, setRestaurants] = useState([]);
   const [orders, setOrders] = useState([]);
+  const [promoCodes, setPromoCodes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('overview');
+  const [showAddPromo, setShowAddPromo] = useState(false);
+  const [newPromo, setNewPromo] = useState({
+    code: '',
+    description: '',
+    discount_type: 'percentage',
+    discount_value: '',
+    min_order: '0',
+    max_discount: '',
+    first_order_only: false
+  });
 
   useEffect(() => {
     loadData();
@@ -26,22 +43,88 @@ export default function AdminDashboard() {
 
   const loadData = async () => {
     try {
-      const [analyticsRes, usersRes, restaurantsRes, ordersRes] = await Promise.all([
+      const [analyticsRes, usersRes, restaurantsRes, ordersRes, promosRes] = await Promise.all([
         axios.get(`${API}/admin/analytics`),
         axios.get(`${API}/admin/users`),
         axios.get(`${API}/admin/restaurants`),
-        axios.get(`${API}/orders`)
+        axios.get(`${API}/orders`),
+        axios.get(`${API}/promo-codes`).catch(() => ({ data: [] }))
       ]);
       
       setAnalytics(analyticsRes.data);
       setUsers(usersRes.data);
       setRestaurants(restaurantsRes.data);
       setOrders(ordersRes.data);
+      setPromoCodes(promosRes.data);
     } catch (error) {
       console.error('Failed to load data:', error);
       toast.error('Failed to load admin data');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const seedPromos = async () => {
+    try {
+      await axios.post(`${API}/seed-promos`);
+      toast.success('Promo codes seeded!');
+      loadData();
+    } catch (error) {
+      toast.error('Failed to seed promos');
+    }
+  };
+
+  const addPromoCode = async () => {
+    if (!newPromo.code || !newPromo.description || !newPromo.discount_value) {
+      toast.error('Please fill in all required fields');
+      return;
+    }
+
+    try {
+      await axios.post(`${API}/promo-codes`, {
+        code: newPromo.code.toUpperCase(),
+        description: newPromo.description,
+        discount_type: newPromo.discount_type,
+        discount_value: parseFloat(newPromo.discount_value),
+        min_order: parseFloat(newPromo.min_order) || 0,
+        max_discount: newPromo.max_discount ? parseFloat(newPromo.max_discount) : null,
+        first_order_only: newPromo.first_order_only
+      });
+      toast.success('Promo code created!');
+      setShowAddPromo(false);
+      setNewPromo({
+        code: '',
+        description: '',
+        discount_type: 'percentage',
+        discount_value: '',
+        min_order: '0',
+        max_discount: '',
+        first_order_only: false
+      });
+      loadData();
+    } catch (error) {
+      toast.error(error.response?.data?.detail || 'Failed to create promo code');
+    }
+  };
+
+  const togglePromoStatus = async (promoId, isActive) => {
+    try {
+      await axios.put(`${API}/promo-codes/${promoId}`, { is_active: !isActive });
+      loadData();
+      toast.success(isActive ? 'Promo deactivated' : 'Promo activated');
+    } catch (error) {
+      toast.error('Failed to update promo');
+    }
+  };
+
+  const deletePromo = async (promoId) => {
+    if (!window.confirm('Delete this promo code?')) return;
+    try {
+      await axios.delete(`${API}/promo-codes/${promoId}`);
+      loadData();
+      toast.success('Promo code deleted');
+    } catch (error) {
+      toast.error('Failed to delete promo');
     }
   };
 
@@ -85,6 +168,7 @@ export default function AdminDashboard() {
             { id: 'users', icon: Users, label: 'Users' },
             { id: 'restaurants', icon: Store, label: 'Restaurants' },
             { id: 'orders', icon: Package, label: 'Orders' },
+            { id: 'promos', icon: Tag, label: 'Promo Codes' },
           ].map((item) => (
             <button
               key={item.id}

@@ -140,8 +140,11 @@ class Order(BaseModel):
     items: List[OrderItem]
     subtotal: float
     delivery_fee: float
+    discount: float = 0.0
+    promo_code: Optional[str] = None
     total: float
     delivery_address: str
+    area: Optional[str] = None
     payment_method: str  # cod, gcash, paymaya
     payment_status: str = "pending"  # pending, paid, failed
     order_status: str = "pending"  # pending, confirmed, preparing, ready, picked_up, delivered, cancelled
@@ -153,7 +156,9 @@ class OrderCreate(BaseModel):
     restaurant_id: str
     items: List[CartItem]
     delivery_address: str
+    area: Optional[str] = None
     payment_method: str
+    promo_code: Optional[str] = None
     special_instructions: Optional[str] = None
 
 class PabiliRequest(BaseModel):
@@ -202,6 +207,54 @@ class DriverProfile(BaseModel):
 class DriverProfileCreate(BaseModel):
     vehicle_type: str
     plate_number: str
+
+class PromoCode(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    code: str  # e.g., "WELCOME50", "FREEDEL"
+    description: str
+    discount_type: str  # "percentage", "fixed", "free_delivery"
+    discount_value: float  # percentage (0-100) or fixed amount
+    min_order: float = 0.0  # minimum order to apply
+    max_discount: Optional[float] = None  # cap for percentage discounts
+    usage_limit: Optional[int] = None  # total uses allowed
+    usage_count: int = 0
+    per_user_limit: int = 1  # uses per user
+    valid_from: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    valid_until: Optional[datetime] = None
+    is_active: bool = True
+    applicable_areas: Optional[List[str]] = None  # None = all areas
+    first_order_only: bool = False
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class PromoCodeCreate(BaseModel):
+    code: str
+    description: str
+    discount_type: str
+    discount_value: float
+    min_order: float = 0.0
+    max_discount: Optional[float] = None
+    usage_limit: Optional[int] = None
+    per_user_limit: int = 1
+    valid_until: Optional[str] = None
+    applicable_areas: Optional[List[str]] = None
+    first_order_only: bool = False
+
+class PromoCodeApply(BaseModel):
+    code: str
+    subtotal: float
+    delivery_fee: float
+    area: Optional[str] = None
+
+class PromoUsage(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    promo_id: str
+    promo_code: str
+    user_id: str
+    order_id: Optional[str] = None
+    discount_applied: float
+    used_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 # ==================== AUTH HELPERS ====================
 
@@ -453,7 +506,57 @@ async def create_order(data: OrderCreate, user = Depends(get_current_user)):
     if subtotal < restaurant["min_order"]:
         raise HTTPException(status_code=400, detail=f"Minimum order is ₱{restaurant['min_order']}")
     
-    total = subtotal + restaurant["delivery_fee"]
+    # Handle promo code
+    discount = 0.0
+    promo_code = None
+    if data.promo_code:
+        promo_code = data.promo_code.upper()
+        promo = await db.promo_codes.find_one({"code": promo_code}, {"_id": 0})
+        
+        if promo and promo.get("is_active", False):
+            # Validate promo
+            now = datetime.now(timezone.utc)
+            valid = True
+            
+            # Check per-user limit
+            user_usage = await db.promo_usage.count_documents({
+                "promo_id": promo["id"],
+                "user_id": user["id"]
+            })
+            if user_usage >= promo.get("per_user_limit", 1):
+                valid = False
+            
+            # Check first order only
+            if promo.get("first_order_only", False):
+                user_orders = await db.orders.count_documents({"customer_id": user["id"]})
+                if user_orders > 0:
+                    valid = False
+            
+            # Check min order
+            if subtotal < promo.get("min_order", 0):
+                valid = False
+            
+            if valid:
+                # Calculate discount
+                discount_type = promo["discount_type"]
+                discount_value = promo["discount_value"]
+                
+                if discount_type == "free_delivery":
+                    discount = restaurant["delivery_fee"]
+                elif discount_type == "percentage":
+                    discount = subtotal * (discount_value / 100)
+                    if promo.get("max_discount"):
+                        discount = min(discount, promo["max_discount"])
+                elif discount_type == "fixed":
+                    discount = min(discount_value, subtotal + restaurant["delivery_fee"])
+                
+                # Record promo usage
+                await db.promo_codes.update_one(
+                    {"id": promo["id"]},
+                    {"$inc": {"usage_count": 1}}
+                )
+    
+    total = subtotal + restaurant["delivery_fee"] - discount
     
     order = Order(
         customer_id=user["id"],
@@ -464,8 +567,11 @@ async def create_order(data: OrderCreate, user = Depends(get_current_user)):
         items=order_items,
         subtotal=subtotal,
         delivery_fee=restaurant["delivery_fee"],
+        discount=discount,
+        promo_code=promo_code if discount > 0 else None,
         total=total,
         delivery_address=data.delivery_address,
+        area=data.area,
         payment_method=data.payment_method,
         special_instructions=data.special_instructions
     )
@@ -474,6 +580,21 @@ async def create_order(data: OrderCreate, user = Depends(get_current_user)):
     doc["created_at"] = doc["created_at"].isoformat()
     doc["updated_at"] = doc["updated_at"].isoformat()
     await db.orders.insert_one(doc)
+    
+    # Record promo usage with order ID
+    if promo_code and discount > 0:
+        promo = await db.promo_codes.find_one({"code": promo_code}, {"_id": 0})
+        if promo:
+            usage = PromoUsage(
+                promo_id=promo["id"],
+                promo_code=promo_code,
+                user_id=user["id"],
+                order_id=order.id,
+                discount_applied=discount
+            )
+            usage_doc = usage.model_dump()
+            usage_doc["used_at"] = usage_doc["used_at"].isoformat()
+            await db.promo_usage.insert_one(usage_doc)
     
     return order
 
@@ -770,6 +891,190 @@ async def get_analytics(user = Depends(get_current_user)):
         "orders_delivered": orders_delivered,
         "total_revenue": total_revenue
     }
+
+# ==================== PROMO CODES ====================
+
+@api_router.post("/promo-codes", status_code=201)
+async def create_promo_code(data: PromoCodeCreate, user = Depends(get_current_user)):
+    """Create a new promo code (admin only)"""
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    # Check if code already exists
+    existing = await db.promo_codes.find_one({"code": data.code.upper()}, {"_id": 0})
+    if existing:
+        raise HTTPException(status_code=400, detail="Promo code already exists")
+    
+    promo = PromoCode(
+        code=data.code.upper(),
+        description=data.description,
+        discount_type=data.discount_type,
+        discount_value=data.discount_value,
+        min_order=data.min_order,
+        max_discount=data.max_discount,
+        usage_limit=data.usage_limit,
+        per_user_limit=data.per_user_limit,
+        valid_until=datetime.fromisoformat(data.valid_until) if data.valid_until else None,
+        applicable_areas=data.applicable_areas,
+        first_order_only=data.first_order_only
+    )
+    
+    doc = promo.model_dump()
+    doc["created_at"] = doc["created_at"].isoformat()
+    doc["valid_from"] = doc["valid_from"].isoformat()
+    if doc["valid_until"]:
+        doc["valid_until"] = doc["valid_until"].isoformat()
+    
+    await db.promo_codes.insert_one(doc)
+    doc.pop("_id", None)
+    
+    return doc
+
+@api_router.get("/promo-codes")
+async def get_promo_codes(user = Depends(get_current_user)):
+    """Get all promo codes (admin only)"""
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    promos = await db.promo_codes.find({}, {"_id": 0}).to_list(100)
+    return promos
+
+@api_router.get("/promo-codes/active")
+async def get_active_promo_codes():
+    """Get active promo codes for display"""
+    now = datetime.now(timezone.utc).isoformat()
+    promos = await db.promo_codes.find({
+        "is_active": True,
+        "valid_from": {"$lte": now},
+        "$or": [
+            {"valid_until": None},
+            {"valid_until": {"$gte": now}}
+        ]
+    }, {"_id": 0}).to_list(20)
+    
+    # Filter out codes that have reached usage limit
+    active_promos = []
+    for p in promos:
+        if p.get("usage_limit") is None or p.get("usage_count", 0) < p["usage_limit"]:
+            # Return limited info for public display
+            active_promos.append({
+                "code": p["code"],
+                "description": p["description"],
+                "discount_type": p["discount_type"],
+                "discount_value": p["discount_value"],
+                "min_order": p.get("min_order", 0),
+                "first_order_only": p.get("first_order_only", False)
+            })
+    
+    return active_promos
+
+@api_router.post("/promo-codes/validate")
+async def validate_promo_code(data: PromoCodeApply, user = Depends(get_current_user)):
+    """Validate and calculate discount for a promo code"""
+    code = data.code.upper()
+    
+    promo = await db.promo_codes.find_one({"code": code}, {"_id": 0})
+    if not promo:
+        raise HTTPException(status_code=404, detail="Promo code not found")
+    
+    # Check if active
+    if not promo.get("is_active", False):
+        raise HTTPException(status_code=400, detail="This promo code is no longer active")
+    
+    # Check validity period
+    now = datetime.now(timezone.utc)
+    valid_from = datetime.fromisoformat(promo["valid_from"].replace("Z", "+00:00")) if isinstance(promo["valid_from"], str) else promo["valid_from"]
+    if now < valid_from:
+        raise HTTPException(status_code=400, detail="This promo code is not yet valid")
+    
+    if promo.get("valid_until"):
+        valid_until = datetime.fromisoformat(promo["valid_until"].replace("Z", "+00:00")) if isinstance(promo["valid_until"], str) else promo["valid_until"]
+        if now > valid_until:
+            raise HTTPException(status_code=400, detail="This promo code has expired")
+    
+    # Check usage limit
+    if promo.get("usage_limit") and promo.get("usage_count", 0) >= promo["usage_limit"]:
+        raise HTTPException(status_code=400, detail="This promo code has reached its usage limit")
+    
+    # Check per-user limit
+    user_usage = await db.promo_usage.count_documents({
+        "promo_id": promo["id"],
+        "user_id": user["id"]
+    })
+    if user_usage >= promo.get("per_user_limit", 1):
+        raise HTTPException(status_code=400, detail="You have already used this promo code")
+    
+    # Check first order only
+    if promo.get("first_order_only", False):
+        user_orders = await db.orders.count_documents({"customer_id": user["id"]})
+        if user_orders > 0:
+            raise HTTPException(status_code=400, detail="This promo code is for first orders only")
+    
+    # Check minimum order
+    if data.subtotal < promo.get("min_order", 0):
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Minimum order of ₱{promo['min_order']} required for this promo"
+        )
+    
+    # Check applicable areas
+    if promo.get("applicable_areas") and data.area:
+        if data.area not in promo["applicable_areas"]:
+            raise HTTPException(status_code=400, detail="This promo code is not valid for your area")
+    
+    # Calculate discount
+    discount = 0.0
+    discount_type = promo["discount_type"]
+    discount_value = promo["discount_value"]
+    
+    if discount_type == "free_delivery":
+        discount = data.delivery_fee
+    elif discount_type == "percentage":
+        discount = data.subtotal * (discount_value / 100)
+        if promo.get("max_discount"):
+            discount = min(discount, promo["max_discount"])
+    elif discount_type == "fixed":
+        discount = min(discount_value, data.subtotal + data.delivery_fee)
+    
+    return {
+        "valid": True,
+        "code": code,
+        "description": promo["description"],
+        "discount_type": discount_type,
+        "discount_value": discount_value,
+        "discount_amount": round(discount, 2),
+        "new_total": round(data.subtotal + data.delivery_fee - discount, 2)
+    }
+
+@api_router.put("/promo-codes/{promo_id}")
+async def update_promo_code(promo_id: str, updates: dict, user = Depends(get_current_user)):
+    """Update a promo code (admin only)"""
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    promo = await db.promo_codes.find_one({"id": promo_id}, {"_id": 0})
+    if not promo:
+        raise HTTPException(status_code=404, detail="Promo code not found")
+    
+    allowed_fields = ["description", "is_active", "usage_limit", "valid_until", "min_order", "max_discount"]
+    update_data = {k: v for k, v in updates.items() if k in allowed_fields}
+    
+    if update_data:
+        await db.promo_codes.update_one({"id": promo_id}, {"$set": update_data})
+    
+    return await db.promo_codes.find_one({"id": promo_id}, {"_id": 0})
+
+@api_router.delete("/promo-codes/{promo_id}")
+async def delete_promo_code(promo_id: str, user = Depends(get_current_user)):
+    """Delete a promo code (admin only)"""
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    result = await db.promo_codes.delete_one({"id": promo_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Promo code not found")
+    
+    return {"message": "Promo code deleted"}
 
 # ==================== COVERAGE AREAS ====================
 
@@ -1123,6 +1428,113 @@ async def seed_data():
     await db.menu_items.insert_many(menu_items_data)
     
     return {"message": "Sample data seeded successfully", "restaurants": len(restaurants_data), "menu_items": len(menu_items_data)}
+
+@api_router.post("/seed-promos")
+async def seed_promo_codes():
+    """Seed sample promo codes for testing"""
+    existing = await db.promo_codes.find_one({})
+    if existing:
+        return {"message": "Promo codes already seeded"}
+    
+    now = datetime.now(timezone.utc)
+    next_month = now + timedelta(days=30)
+    
+    promo_codes = [
+        {
+            "id": str(uuid.uuid4()),
+            "code": "WELCOME50",
+            "description": "50% off your first order! Maximum ₱100 discount.",
+            "discount_type": "percentage",
+            "discount_value": 50.0,
+            "min_order": 200.0,
+            "max_discount": 100.0,
+            "usage_limit": 1000,
+            "usage_count": 0,
+            "per_user_limit": 1,
+            "valid_from": now.isoformat(),
+            "valid_until": next_month.isoformat(),
+            "is_active": True,
+            "first_order_only": True,
+            "applicable_areas": None,
+            "created_at": now.isoformat()
+        },
+        {
+            "id": str(uuid.uuid4()),
+            "code": "FREEDEL",
+            "description": "Free delivery on orders ₱300+",
+            "discount_type": "free_delivery",
+            "discount_value": 0,
+            "min_order": 300.0,
+            "max_discount": None,
+            "usage_limit": 500,
+            "usage_count": 0,
+            "per_user_limit": 3,
+            "valid_from": now.isoformat(),
+            "valid_until": next_month.isoformat(),
+            "is_active": True,
+            "first_order_only": False,
+            "applicable_areas": None,
+            "created_at": now.isoformat()
+        },
+        {
+            "id": str(uuid.uuid4()),
+            "code": "URDANETA20",
+            "description": "₱20 off for Urdaneta City orders",
+            "discount_type": "fixed",
+            "discount_value": 20.0,
+            "min_order": 150.0,
+            "max_discount": None,
+            "usage_limit": None,
+            "usage_count": 0,
+            "per_user_limit": 5,
+            "valid_from": now.isoformat(),
+            "valid_until": next_month.isoformat(),
+            "is_active": True,
+            "first_order_only": False,
+            "applicable_areas": ["Urdaneta City"],
+            "created_at": now.isoformat()
+        },
+        {
+            "id": str(uuid.uuid4()),
+            "code": "PABILI10",
+            "description": "₱10 off Pabili service fee",
+            "discount_type": "fixed",
+            "discount_value": 10.0,
+            "min_order": 0,
+            "max_discount": None,
+            "usage_limit": 200,
+            "usage_count": 0,
+            "per_user_limit": 2,
+            "valid_from": now.isoformat(),
+            "valid_until": next_month.isoformat(),
+            "is_active": True,
+            "first_order_only": False,
+            "applicable_areas": None,
+            "created_at": now.isoformat()
+        },
+        {
+            "id": str(uuid.uuid4()),
+            "code": "MERYENDA",
+            "description": "15% off afternoon orders (2-5 PM)",
+            "discount_type": "percentage",
+            "discount_value": 15.0,
+            "min_order": 100.0,
+            "max_discount": 50.0,
+            "usage_limit": 300,
+            "usage_count": 0,
+            "per_user_limit": 3,
+            "valid_from": now.isoformat(),
+            "valid_until": next_month.isoformat(),
+            "is_active": True,
+            "first_order_only": False,
+            "applicable_areas": None,
+            "created_at": now.isoformat()
+        }
+    ]
+    
+    await db.promo_codes.insert_many(promo_codes)
+    
+    return {"message": "Promo codes seeded successfully", "count": len(promo_codes)}
 
 # ==================== HEALTH CHECK ====================
 
