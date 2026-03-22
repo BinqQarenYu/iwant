@@ -454,6 +454,183 @@ export default function AdminDashboard() {
             </div>
           </div>
         )}
+
+        {/* Promo Codes Tab */}
+        {activeTab === 'promos' && (
+          <div className="space-y-6">
+            <div className="flex items-center justify-between">
+              <h2 className="text-xl font-bold">Promo Codes ({promoCodes.length})</h2>
+              <div className="flex gap-2">
+                {promoCodes.length === 0 && (
+                  <Button variant="outline" onClick={seedPromos} data-testid="seed-promos-btn">
+                    Seed Sample Promos
+                  </Button>
+                )}
+                <Dialog open={showAddPromo} onOpenChange={setShowAddPromo}>
+                  <DialogTrigger asChild>
+                    <Button className="btn-primary" data-testid="add-promo-btn">
+                      <Plus className="w-4 h-4 mr-2" /> Add Promo
+                    </Button>
+                  </DialogTrigger>
+                  <DialogContent>
+                    <DialogHeader>
+                      <DialogTitle>Create Promo Code</DialogTitle>
+                    </DialogHeader>
+                    <div className="space-y-4 pt-4">
+                      <div>
+                        <Label>Code *</Label>
+                        <Input
+                          value={newPromo.code}
+                          onChange={(e) => setNewPromo({ ...newPromo, code: e.target.value.toUpperCase() })}
+                          placeholder="e.g., WELCOME50"
+                          className="uppercase"
+                          data-testid="promo-code-input"
+                        />
+                      </div>
+                      <div>
+                        <Label>Description *</Label>
+                        <Input
+                          value={newPromo.description}
+                          onChange={(e) => setNewPromo({ ...newPromo, description: e.target.value })}
+                          placeholder="e.g., 50% off first order"
+                          data-testid="promo-desc-input"
+                        />
+                      </div>
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <Label>Discount Type *</Label>
+                          <select
+                            value={newPromo.discount_type}
+                            onChange={(e) => setNewPromo({ ...newPromo, discount_type: e.target.value })}
+                            className="w-full h-10 rounded-md border border-input bg-background px-3 py-2"
+                            data-testid="promo-type-select"
+                          >
+                            <option value="percentage">Percentage (%)</option>
+                            <option value="fixed">Fixed Amount (₱)</option>
+                            <option value="free_delivery">Free Delivery</option>
+                          </select>
+                        </div>
+                        <div>
+                          <Label>Discount Value *</Label>
+                          <Input
+                            type="number"
+                            value={newPromo.discount_value}
+                            onChange={(e) => setNewPromo({ ...newPromo, discount_value: e.target.value })}
+                            placeholder={newPromo.discount_type === 'percentage' ? '50' : '100'}
+                            disabled={newPromo.discount_type === 'free_delivery'}
+                            data-testid="promo-value-input"
+                          />
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <Label>Min. Order (₱)</Label>
+                          <Input
+                            type="number"
+                            value={newPromo.min_order}
+                            onChange={(e) => setNewPromo({ ...newPromo, min_order: e.target.value })}
+                            placeholder="0"
+                            data-testid="promo-min-order"
+                          />
+                        </div>
+                        <div>
+                          <Label>Max Discount (₱)</Label>
+                          <Input
+                            type="number"
+                            value={newPromo.max_discount}
+                            onChange={(e) => setNewPromo({ ...newPromo, max_discount: e.target.value })}
+                            placeholder="No limit"
+                            data-testid="promo-max-discount"
+                          />
+                        </div>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <Label>First Order Only</Label>
+                        <Switch
+                          checked={newPromo.first_order_only}
+                          onCheckedChange={(checked) => setNewPromo({ ...newPromo, first_order_only: checked })}
+                          data-testid="promo-first-order"
+                        />
+                      </div>
+                      <Button className="w-full btn-primary" onClick={addPromoCode} data-testid="save-promo-btn">
+                        Create Promo Code
+                      </Button>
+                    </div>
+                  </DialogContent>
+                </Dialog>
+              </div>
+            </div>
+
+            {promoCodes.length === 0 ? (
+              <div className="bg-white rounded-2xl p-8 border border-border text-center">
+                <Tag className="w-12 h-12 text-gray-300 mx-auto mb-4" />
+                <p className="text-muted-foreground mb-4">No promo codes yet</p>
+                <Button variant="outline" onClick={seedPromos}>
+                  Add Sample Promo Codes
+                </Button>
+              </div>
+            ) : (
+              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                {promoCodes.map((promo) => (
+                  <div 
+                    key={promo.id} 
+                    className={`bg-white rounded-2xl p-4 border-2 ${promo.is_active ? 'border-green-200' : 'border-gray-200'}`}
+                  >
+                    <div className="flex items-start justify-between mb-3">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-lg text-[#FF6B00]">{promo.code}</span>
+                          {promo.first_order_only && (
+                            <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">
+                              1st Order
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-sm text-muted-foreground">{promo.description}</p>
+                      </div>
+                      <Switch
+                        checked={promo.is_active}
+                        onCheckedChange={() => togglePromoStatus(promo.id, promo.is_active)}
+                        data-testid={`toggle-promo-${promo.id}`}
+                      />
+                    </div>
+                    
+                    <div className="space-y-2 text-sm">
+                      <div className="flex items-center gap-2">
+                        <Percent className="w-4 h-4 text-muted-foreground" />
+                        <span>
+                          {promo.discount_type === 'percentage' && `${promo.discount_value}% off`}
+                          {promo.discount_type === 'fixed' && `₱${promo.discount_value} off`}
+                          {promo.discount_type === 'free_delivery' && 'Free Delivery'}
+                        </span>
+                      </div>
+                      {promo.min_order > 0 && (
+                        <p className="text-muted-foreground">Min. order: ₱{promo.min_order}</p>
+                      )}
+                      {promo.max_discount && (
+                        <p className="text-muted-foreground">Max discount: ₱{promo.max_discount}</p>
+                      )}
+                      <div className="flex items-center justify-between pt-2 border-t border-border">
+                        <span className="text-muted-foreground">
+                          Used: {promo.usage_count || 0}{promo.usage_limit ? `/${promo.usage_limit}` : ''}
+                        </span>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="text-red-500 hover:text-red-600 hover:bg-red-50"
+                          onClick={() => deletePromo(promo.id)}
+                          data-testid={`delete-promo-${promo.id}`}
+                        >
+                          <XCircle className="w-4 h-4" />
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </main>
     </div>
   );
