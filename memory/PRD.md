@@ -30,6 +30,14 @@ PC and mobile app for food delivery in Urdaneta City, Pangasinan, Philippines an
 - [x] Admin analytics endpoint
 - [x] Coverage areas API (Urdaneta + 7 towns)
 - [x] Location-based delivery fee calculation
+- [x] **Promo Code System** - full CRUD, validation, usage tracking
+
+### Promo Codes Added
+- **WELCOME50**: 50% off first order (max ₱100, min order ₱200)
+- **FREEDEL**: Free delivery on orders ₱300+
+- **URDANETA20**: ₱20 off for Urdaneta City orders
+- **PABILI10**: ₱10 off Pabili service fee
+- **MERYENDA**: 15% off afternoon orders (max ₱50)
 
 ### Frontend (React + Tailwind + Shadcn)
 - [x] Homepage with Keeta/Talabat-style design
@@ -45,9 +53,10 @@ PC and mobile app for food delivery in Urdaneta City, Pangasinan, Philippines an
 - [x] Profile management
 - [x] Restaurant dashboard (orders, menu management)
 - [x] Driver dashboard (deliveries, earnings, availability)
-- [x] Admin dashboard (users, restaurants, analytics)
+- [x] Admin dashboard (users, restaurants, analytics, **promo codes**)
 - [x] Bilingual support (EN/Filipino toggle)
 - [x] Bottom navigation
+- [x] **Checkout promo code input with available promos display**
 
 ### Coverage Areas
 - Urdaneta City (Main) - ₱30 delivery
@@ -74,10 +83,11 @@ PC and mobile app for food delivery in Urdaneta City, Pangasinan, Philippines an
 
 ### P2 (Medium Priority)
 - [ ] Restaurant analytics dashboard
-- [ ] Promo codes and discounts
+- [ ] Loyalty points program
 - [ ] Favorite restaurants
 - [ ] Order history export
 - [ ] Multi-language (Ilocano, Pangasinan)
+- [ ] Scheduled delivery time selection
 
 ### P3 (Nice to Have)
 - [ ] Restaurant recommendations
