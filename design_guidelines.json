@@ -1,0 +1,152 @@
+{
+  "theme": "light",
+  "archetype": "VIBRANT & ACCESSIBLE (Food Delivery & Utility)",
+  "emotion": "Appetizing, fast, approachable, and localized for the Urdaneta community",
+  "typography": {
+    "headings": {
+      "family": "Outfit",
+      "weights": ["600", "700", "800"],
+      "description": "Bold, friendly, and highly legible for restaurant names, promotions, and section titles. Never use generic fonts for headers."
+    },
+    "body": {
+      "family": "DM Sans",
+      "weights": ["400", "500"],
+      "description": "Clean geometric sans-serif for menus, pricing, and descriptions to ensure readability in low-bandwidth or outdoor mobile usage."
+    },
+    "rules": [
+      "Headings (Size > 32px) MUST use tracking-tight.",
+      "Overlines / Labels MUST be Uppercase + Tiny + Wide Spacing (tracking-[0.2em]).",
+      "Use leading-none for headers, leading-relaxed for body text."
+    ]
+  },
+  "colors": {
+    "primary": {
+      "DEFAULT": "#FF6B00",
+      "hover": "#E65A00",
+      "foreground": "#FFFFFF",
+      "description": "Vibrant Tangerine. Used for primary CTAs (Order Now, Checkout) and active states. Evokes appetite and speed."
+    },
+    "secondary": {
+      "DEFAULT": "#FFC107",
+      "hover": "#E0A800",
+      "foreground": "#1A1A1A",
+      "description": "Sunshine Yellow. Used for ratings, highlights, and secondary actions."
+    },
+    "pabili_accent": {
+      "DEFAULT": "#0284C7",
+      "hover": "#0369A1",
+      "foreground": "#FFFFFF",
+      "description": "Ocean Blue. Used specifically for the 'Pabili' (grocery/errand) service to visually separate it from food delivery."
+    },
+    "background": {
+      "DEFAULT": "#F8F9FA",
+      "card": "#FFFFFF",
+      "description": "Off-white background to make white cards and food photos pop."
+    },
+    "text": {
+      "primary": "#1A1A1A",
+      "secondary": "#64748B",
+      "muted": "#94A3B8"
+    },
+    "status": {
+      "success": "#10B981",
+      "warning": "#F59E0B",
+      "error": "#EF4444"
+    },
+    "rules": [
+      "Never use pure black or pure gray. Grays must have a slight tint.",
+      "Primary color MUST be used sparingly. Only for CTAs, active states, and primary icons.",
+      "Ensure minimum 4.5:1 contrast ratio for text."
+    ]
+  },
+  "visual_enhancers": {
+    "corners": "rounded-2xl for main cards, rounded-full for buttons and pills. Creates a friendly, consumable feel.",
+    "shadows": "Soft, diffuse shadows (shadow-sm or shadow-[0_8px_30px_rgb(0,0,0,0.04)]). Do not use heavy borders.",
+    "glassmorphism": "Use backdrop-blur-xl with bg-white/80 and a delicate border-white/20 for sticky headers and bottom mobile navigation.",
+    "textures": "Subtle noise overlay (opacity 0.02) on hero banners to kill digital flatness."
+  },
+  "layouts": {
+    "mobile_first": true,
+    "customer_app": {
+      "container": "max-w-md mx-auto sm:max-w-full (Mobile app feel on PC).",
+      "navigation": "Sticky bottom tab bar for mobile. Top navbar for PC.",
+      "home_feed": "Bento-style promotional grid at the top. Horizontal scroll groups (flex overflow-x-auto snap-x) for food categories, followed by a vertical list of restaurants.",
+      "spacing": "Generous vertical spacing (gap-6 to gap-8) between sections."
+    },
+    "dashboards": {
+      "container": "Full width with sidebar (Restaurant / Admin / Driver PC).",
+      "grid": "High density bento grids (grid-cols-1 md:grid-cols-3 lg:grid-cols-4) with gap-4 or gap-6 for metrics and analytics."
+    }
+  },
+  "motion": {
+    "hover": "Cards lift (-translate-y-1) and shadow deepens on hover.",
+    "click": "Scale down slightly (scale-95) for buttons to give tactile feedback.",
+    "transitions": "transition-all duration-300 ease-out for layout shifts, transition-colors for buttons.",
+    "page_load": "Staggered fade-up for restaurant lists and dashboard widgets."
+  },
+  "accessibility": {
+    "focus": "focus:ring-2 focus:ring-primary/50 focus:outline-none",
+    "contrast": "Text over food images MUST have a dark gradient overlay (bg-gradient-to-t from-black/80 to-transparent) to ensure readability.",
+    "testing": "All interactive elements MUST include a data-testid attribute (e.g., data-testid='checkout-button')."
+  },
+  "media": {
+    "images": [
+      {
+        "url": "https://images.unsplash.com/photo-1593870682262-8c9f6a9bb225?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NTYxODd8MHwxfHNlYXJjaHwyfHxmaWxpcGlubyUyMHN0cmVldCUyMGZvb2R8ZW58MHx8fHwxNzc0MTgyMTk5fDA&ixlib=rb-4.1.0&q=85",
+        "category": "Hero / Promo Background",
+        "description": "Grilled meat street food. Use for prominent local food promotions or hero section."
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1694134645469-5326b3a1f865?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NTYxODd8MHwxfHNlYXJjaHwzfHxmaWxpcGlubyUyMHN0cmVldCUyMGZvb2R8ZW58MHx8fHwxNzc0MTgyMTk5fDA&ixlib=rb-4.1.0&q=85",
+        "category": "Restaurant Thumbnail",
+        "description": "Skewers of food on a blue tray. Use for local Urdaneta vendor placeholders."
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1642616128754-7d026f979317?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NTYxODd8MHwxfHNlYXJjaHwxfHxmaWxpcGlubyUyMHN0cmVldCUyMGZvb2R8ZW58MHx8fHwxNzc0MTgyMTk5fDA&ixlib=rb-4.1.0&q=85",
+        "category": "Food Category",
+        "description": "Person serving food from a bowl. Good for 'Home Cooked' or 'Soups' categories."
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1767114648562-399d88d7362d?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NTYxOTB8MHwxfHNlYXJjaHwyfHxtb3RvcmN5Y2xlJTIwZGVsaXZlcnklMjBkcml2ZXJ8ZW58MHx8fHwxNzc0MTgyMjAwfDA&ixlib=rb-4.1.0&q=85",
+        "category": "Driver Profile / Onboarding",
+        "description": "Delivery person with scooter on city street. Use for Driver app landing page or rider profile placeholder."
+      },
+      {
+        "url": "https://images.pexels.com/photos/7362949/pexels-photo-7362949.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+        "category": "Driver Active State",
+        "description": "Delivery rider checking smartphone on motorcycle. Use for 'Tracking' view or Driver Dashboard."
+      }
+    ]
+  },
+  "component_rules": {
+    "buttons": "Pill-shaped (rounded-full) for primary actions. Use font-bold and tracking-wide. Add subtle scale-down on active.",
+    "cards": "Highly rounded (rounded-2xl). Flat background, 1px subtle border (border-border), no heavy shadow by default. Hover adds shadow-lg and -translate-y-1.",
+    "inputs": "Shadcn standard but customized to rounded-xl with bg-white/50 and border-border/60. Focus ring is primary color.",
+    "badges": "Used heavily for 'Free Delivery', 'Promo', 'New'. rounded-full, small text, high contrast (e.g., bg-yellow-400 text-black).",
+    "toasts": "Use 'sonner' for order updates and pabili request confirmations.",
+    "icons": "Use lucide-react (default). For highly detailed illustrations, use @phosphor-icons/react (Duotone)."
+  },
+  "instructions_to_main_agent": [
+    "You are building a hybrid fullstack app tailored for Urdaneta City, Philippines.",
+    "Prioritize a mobile-first layout. On large screens (PC), the customer view should act as a centered mobile-width container or elegantly expand using a bento grid.",
+    "Distinctly separate the 'Food Delivery' flow from the 'Pabili (Grocery/Errand)' flow. Use the pabili_accent color for the Pabili flow to create a mental model shift.",
+    "For the Driver, Restaurant, and Admin views, switch to a dense, functional dashboard layout (sidebar + metrics grid).",
+    "Do NOT use transparent backgrounds on dropdowns, headers overlaying content, or bottom navs without adding backdrop-blur and a semi-transparent base color (e.g., bg-white/80).",
+    "Use standard JS files for React components (not TSX as per project constraints).",
+    "All functional interactions MUST be testable. Add data-testid attributes to ALL buttons, inputs, links, and actionable cards.",
+    "Do NOT use arbitrary AI emojis (like 🤖, 🔮, 💡) for icons. Use lucide-react.",
+    "Implement clear location context. Visually anchor the user in 'Urdaneta City' on the home page header.",
+    "Add 'GCash' and 'PayMaya' as custom payment options alongside COD in the checkout UI."
+  ],
+  "UNIVERSAL_GUIDELINES_FOR_MAIN_AGENT": [
+    "Avoid the 'AI slop' aesthetic: no generic centered layouts, simplistic gradients, or uniform styling.",
+    "Create depth through layered design elements with z-index hierarchy.",
+    "Use glass-morphism effects with backdrop filters (12-24px blur) where appropriate.",
+    "NEVER apply universal transition (transition: all). Use specific transitions (transition-colors, transition-transform).",
+    "NEVER center align the app container in CSS (.App { text-align: center; }).",
+    "Every interaction needs micro-animations - hover states, transitions, entrance animations. Static = dead.",
+    "Use 2-3x more spacing than feels comfortable.",
+    "Prioritize using pre-existing components from src/components/ui.",
+    "Components MUST use named exports. Pages MUST use default exports."
+  ]
+}
