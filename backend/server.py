@@ -292,6 +292,9 @@ async def verify_otp(request: OTPVerify):
     user_dict["created_at"] = user_dict["created_at"].isoformat()
     await db.users.insert_one(user_dict)
     
+    # Remove _id if it was added by MongoDB
+    user_dict.pop("_id", None)
+    
     token = create_token(new_user.id, new_user.role)
     return {"token": token, "user": user_dict, "is_new": True}
 
@@ -768,6 +771,153 @@ async def get_analytics(user = Depends(get_current_user)):
         "total_revenue": total_revenue
     }
 
+# ==================== COVERAGE AREAS ====================
+
+@api_router.get("/coverage-areas")
+async def get_coverage_areas():
+    """Get delivery coverage areas - Urdaneta City and perimeter towns"""
+    return {
+        "service_area": "Urdaneta City & Surrounding Areas",
+        "center": {
+            "lat": 15.9761,
+            "lng": 120.5711,
+            "name": "Urdaneta City Center"
+        },
+        "areas": [
+            {
+                "id": "urdaneta",
+                "name": "Urdaneta City",
+                "name_tl": "Lungsod ng Urdaneta",
+                "type": "city",
+                "is_primary": True,
+                "lat": 15.9761,
+                "lng": 120.5711,
+                "delivery_fee": 30.0,
+                "estimated_time": "20-35 mins",
+                "barangays": [
+                    "Poblacion", "Nancayasan", "San Vicente", "Cabuloan", "Cabaruan",
+                    "Camantiles", "Casantaan", "Consolacion", "Dilan Paurido", "Dr. Pedro T. Orata",
+                    "Labit Proper", "Labit West", "Mabanogbog", "Macalong", "Nancalobasaan",
+                    "Parayao", "Pinmaludpod", "San Jose", "Santa Lucia", "Santo Domingo",
+                    "Sugcong", "Tiparo", "Tulong"
+                ]
+            },
+            {
+                "id": "binalonan",
+                "name": "Binalonan",
+                "name_tl": "Binalonan",
+                "type": "municipality",
+                "is_primary": False,
+                "lat": 16.0525,
+                "lng": 120.5969,
+                "delivery_fee": 45.0,
+                "estimated_time": "30-45 mins",
+                "barangays": ["Poblacion", "Balangobong", "San Felipe", "San Juan"]
+            },
+            {
+                "id": "asingan",
+                "name": "Asingan",
+                "name_tl": "Asingan",
+                "type": "municipality",
+                "is_primary": False,
+                "lat": 16.0042,
+                "lng": 120.6683,
+                "delivery_fee": 50.0,
+                "estimated_time": "35-50 mins",
+                "barangays": ["Poblacion", "Ariston East", "Ariston West", "Bantog"]
+            },
+            {
+                "id": "villasis",
+                "name": "Villasis",
+                "name_tl": "Villasis",
+                "type": "municipality",
+                "is_primary": False,
+                "lat": 15.9083,
+                "lng": 120.5878,
+                "delivery_fee": 45.0,
+                "estimated_time": "30-45 mins",
+                "barangays": ["Poblacion", "Bacag", "Barangobong", "Puelay"]
+            },
+            {
+                "id": "manaoag",
+                "name": "Manaoag",
+                "name_tl": "Manaoag",
+                "type": "municipality",
+                "is_primary": False,
+                "lat": 16.0439,
+                "lng": 120.4861,
+                "delivery_fee": 50.0,
+                "estimated_time": "35-50 mins",
+                "barangays": ["Poblacion", "Babasit", "Baguinay", "Licsi"]
+            },
+            {
+                "id": "san_manuel",
+                "name": "San Manuel",
+                "name_tl": "San Manuel",
+                "type": "municipality",
+                "is_primary": False,
+                "lat": 15.9883,
+                "lng": 120.6644,
+                "delivery_fee": 45.0,
+                "estimated_time": "30-45 mins",
+                "barangays": ["Poblacion", "San Antonio", "San Juan", "San Roque"]
+            },
+            {
+                "id": "sison",
+                "name": "Sison",
+                "name_tl": "Sison",
+                "type": "municipality",
+                "is_primary": False,
+                "lat": 16.1742,
+                "lng": 120.5117,
+                "delivery_fee": 60.0,
+                "estimated_time": "40-55 mins",
+                "barangays": ["Poblacion", "Amagbagan", "Artacho", "Asan Norte"]
+            },
+            {
+                "id": "pozorrubio",
+                "name": "Pozorrubio",
+                "name_tl": "Pozorrubio",
+                "type": "municipality",
+                "is_primary": False,
+                "lat": 16.1094,
+                "lng": 120.5489,
+                "delivery_fee": 55.0,
+                "estimated_time": "35-50 mins",
+                "barangays": ["Poblacion", "Alipangpang", "Amagbagan", "Balacag"]
+            }
+        ],
+        "polygon": [
+            {"lat": 16.20, "lng": 120.40},
+            {"lat": 16.20, "lng": 120.75},
+            {"lat": 15.85, "lng": 120.75},
+            {"lat": 15.85, "lng": 120.40}
+        ]
+    }
+
+@api_router.post("/check-delivery")
+async def check_delivery_availability(lat: float, lng: float):
+    """Check if a location is within delivery coverage"""
+    # Simple bounding box check for Urdaneta area
+    min_lat, max_lat = 15.85, 16.20
+    min_lng, max_lng = 120.40, 120.75
+    
+    if min_lat <= lat <= max_lat and min_lng <= lng <= max_lng:
+        # Calculate approximate distance from Urdaneta center
+        center_lat, center_lng = 15.9761, 120.5711
+        # Rough distance calculation
+        lat_diff = abs(lat - center_lat)
+        lng_diff = abs(lng - center_lng)
+        
+        if lat_diff < 0.05 and lng_diff < 0.05:
+            return {"available": True, "zone": "urdaneta", "delivery_fee": 30.0, "estimated_time": "20-35 mins"}
+        elif lat_diff < 0.10 and lng_diff < 0.10:
+            return {"available": True, "zone": "nearby", "delivery_fee": 45.0, "estimated_time": "30-45 mins"}
+        else:
+            return {"available": True, "zone": "perimeter", "delivery_fee": 55.0, "estimated_time": "40-55 mins"}
+    
+    return {"available": False, "message": "Sorry, we don't deliver to this location yet."}
+
 # ==================== CUISINE CATEGORIES ====================
 
 @api_router.get("/categories")
@@ -796,7 +946,7 @@ async def seed_data():
     if existing:
         return {"message": "Data already seeded"}
     
-    # Create sample restaurants
+    # Create sample restaurants with locations
     restaurants_data = [
         {
             "id": str(uuid.uuid4()),
@@ -805,8 +955,11 @@ async def seed_data():
             "description": "Authentic Filipino grilled dishes. Best isaw and BBQ in Urdaneta!",
             "cuisine_type": "street_food",
             "address": "McArthur Highway, Urdaneta City",
+            "area": "Urdaneta City",
+            "lat": 15.9785,
+            "lng": 120.5723,
             "phone": "09171234567",
-            "image_url": "https://images.unsplash.com/photo-1593870682262-8c9f6a9bb225?w=800",
+            "image_url": "https://images.unsplash.com/photo-1555939594-58d7cb561ad1?w=800",
             "is_open": True,
             "is_approved": True,
             "rating": 4.5,
@@ -823,8 +976,11 @@ async def seed_data():
             "description": "Home-cooked Filipino meals just like lola used to make. Sinigang, Adobo, Kare-kare and more!",
             "cuisine_type": "filipino",
             "address": "Rizal St., Poblacion, Urdaneta City",
+            "area": "Urdaneta City",
+            "lat": 15.9761,
+            "lng": 120.5711,
             "phone": "09181234567",
-            "image_url": "https://images.unsplash.com/photo-1642616128754-7d026f979317?w=800",
+            "image_url": "https://images.unsplash.com/photo-1504674900247-0877df9cc836?w=800",
             "is_open": True,
             "is_approved": True,
             "rating": 4.8,
@@ -841,6 +997,9 @@ async def seed_data():
             "description": "Crispy fried chicken, wings, and chicken meals. Unli rice available!",
             "cuisine_type": "chicken",
             "address": "Nancayasan, Urdaneta City",
+            "area": "Urdaneta City",
+            "lat": 15.9812,
+            "lng": 120.5689,
             "phone": "09191234567",
             "image_url": "https://images.unsplash.com/photo-1626645738196-c2a7c87a8f58?w=800",
             "is_open": True,
@@ -859,6 +1018,9 @@ async def seed_data():
             "description": "Pancit Canton, Bihon, Palabok, Malabon. Perfect for parties and everyday meals!",
             "cuisine_type": "noodles",
             "address": "San Vicente, Urdaneta City",
+            "area": "Urdaneta City",
+            "lat": 15.9733,
+            "lng": 120.5756,
             "phone": "09201234567",
             "image_url": "https://images.unsplash.com/photo-1569718212165-3a8278d5f624?w=800",
             "is_open": True,
@@ -868,6 +1030,48 @@ async def seed_data():
             "delivery_fee": 30.0,
             "min_order": 100.0,
             "estimated_delivery_time": "25-35 mins",
+            "created_at": datetime.now(timezone.utc).isoformat()
+        },
+        {
+            "id": str(uuid.uuid4()),
+            "owner_id": "system",
+            "name": "Kuya Eddie's Sisig",
+            "description": "The best sizzling sisig in Pangasinan! Pork, Chicken, Bangus, Tofu sisig available.",
+            "cuisine_type": "filipino",
+            "address": "Binalonan Road, Binalonan",
+            "area": "Binalonan",
+            "lat": 16.0525,
+            "lng": 120.5969,
+            "phone": "09211234567",
+            "image_url": "https://images.unsplash.com/photo-1599321329467-7be3840f23a3?w=800",
+            "is_open": True,
+            "is_approved": True,
+            "rating": 4.7,
+            "total_reviews": 203,
+            "delivery_fee": 45.0,
+            "min_order": 150.0,
+            "estimated_delivery_time": "35-45 mins",
+            "created_at": datetime.now(timezone.utc).isoformat()
+        },
+        {
+            "id": str(uuid.uuid4()),
+            "owner_id": "system",
+            "name": "Manaoag Longganisa House",
+            "description": "Famous Vigan-style longganisa and tapsilog meals. Breakfast all day!",
+            "cuisine_type": "filipino",
+            "address": "Main Road, Manaoag",
+            "area": "Manaoag",
+            "lat": 16.0439,
+            "lng": 120.4861,
+            "phone": "09221234567",
+            "image_url": "https://images.unsplash.com/photo-1528735602780-2552fd46c7af?w=800",
+            "is_open": True,
+            "is_approved": True,
+            "rating": 4.4,
+            "total_reviews": 145,
+            "delivery_fee": 50.0,
+            "min_order": 120.0,
+            "estimated_delivery_time": "40-50 mins",
             "created_at": datetime.now(timezone.utc).isoformat()
         }
     ]
