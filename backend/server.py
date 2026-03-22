@@ -421,7 +421,7 @@ async def delete_menu_item(item_id: str, user = Depends(get_current_user)):
 
 # ==================== ORDER ROUTES ====================
 
-@api_router.post("/orders", response_model=Order)
+@api_router.post("/orders", response_model=Order, status_code=201)
 async def create_order(data: OrderCreate, user = Depends(get_current_user)):
     """Create a new order"""
     restaurant = await db.restaurants.find_one({"id": data.restaurant_id}, {"_id": 0})
@@ -554,7 +554,7 @@ async def assign_driver(order_id: str, user = Depends(get_current_user)):
 
 # ==================== PABILI ROUTES ====================
 
-@api_router.post("/pabili", response_model=PabiliRequest)
+@api_router.post("/pabili", response_model=PabiliRequest, status_code=201)
 async def create_pabili_request(data: PabiliCreate, user = Depends(get_current_user)):
     """Create a Pabili (grocery/errand) request"""
     pabili = PabiliRequest(
