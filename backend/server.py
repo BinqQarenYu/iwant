@@ -20,14 +20,22 @@ mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
 
-# Emergent Auth URL
-EMERGENT_AUTH_URL = "https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data"
+# Local Simulation Server
 
 # Create the main app
 app = FastAPI(title="KainTayo - The Sync Dashboard")
 
 # Create a router with the /api prefix
 api_router = APIRouter(prefix="/api")
+
+# Add CORS Middleware to allow requests from the React frontend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 security = HTTPBearer(auto_error=False)
 
@@ -318,20 +326,24 @@ async def exchange_session(request: Request, response: Response):
     if not session_id:
         raise HTTPException(status_code=400, detail="session_id required")
     
-    # Call Emergent Auth to get user data
-    async with httpx.AsyncClient() as client:
-        try:
-            auth_response = await client.get(
-                EMERGENT_AUTH_URL,
-                headers={"X-Session-ID": session_id}
-            )
-            if auth_response.status_code != 200:
-                raise HTTPException(status_code=401, detail="Invalid session_id")
-            
-            auth_data = auth_response.json()
-        except Exception as e:
-            logger.error(f"Auth error: {e}")
-            raise HTTPException(status_code=401, detail="Authentication failed")
+    # Isolated local bypass auth
+    if str(session_id).startswith("dev_bypass_"):
+        role_key = session_id.split("dev_bypass_")[1]
+        dummy_data = {
+            "customer": {"email": "client0@kaintayo.mock", "name": "Customer User", "picture": "https://ui-avatars.com/api/?name=Customer+User"},
+            "restaurant_owner": {"email": "merchant@kaintayo.mock", "name": "Merchant User", "picture": "https://ui-avatars.com/api/?name=Merchant+User"},
+            "rider": {"email": "rider0@kaintayo.mock", "name": "Rider User", "picture": "https://ui-avatars.com/api/?name=Rider+User"}
+        }
+        
+        user_data = dummy_data.get(role_key, dummy_data["customer"])
+        auth_data = {
+            "email": user_data["email"],
+            "name": user_data["name"],
+            "picture": user_data["picture"],
+            "session_token": f"mockToken-{uuid.uuid4().hex}"
+        }
+    else:
+        raise HTTPException(status_code=401, detail="Only localized dev bypass is permitted on this branch.")
     
     email = auth_data.get("email")
     name = auth_data.get("name")
@@ -344,27 +356,42 @@ async def exchange_session(request: Request, response: Response):
     # Check if user exists
     existing_user = await db.users.find_one({"email": email}, {"_id": 0})
     
+    target_role = "customer"
+    if str(session_id).startswith("dev_bypass_"):
+        passed_role = session_id.split("dev_bypass_")[1]
+        role_map = {"restaurant_owner": "merchant", "rider": "rider", "customer": "customer"}
+        target_role = role_map.get(passed_role, "customer")
+
     if existing_user:
         user_id = existing_user["user_id"]
-        # Update user info
+        # Update user info including explicit role
         await db.users.update_one(
             {"user_id": user_id},
-            {"$set": {"name": name, "picture": picture}}
+            {"$set": {"name": name, "picture": picture, "role": target_role}}
         )
     else:
         # Create new user
         user_id = f"user_{uuid.uuid4().hex[:12]}"
+        if target_role == "merchant":
+            user_id = "system" # Map to seed data owner_id
+            
         new_user = {
             "user_id": user_id,
             "email": email,
             "name": name,
             "picture": picture,
-            "role": "customer",  # Default role
+            "role": target_role,
             "language": "en",
             "is_active": True,
             "created_at": datetime.now(timezone.utc).isoformat()
         }
         await db.users.insert_one(new_user)
+        
+        if target_role == "rider":
+            profile = RiderProfile(user_id=user_id, vehicle_type="motorcycle", plate_number="TBD")
+            doc = profile.model_dump()
+            doc["created_at"] = doc["created_at"].isoformat()
+            await db.rider_profiles.insert_one(doc)
     
     # Create session
     expires_at = datetime.now(timezone.utc) + timedelta(days=7)
@@ -444,6 +471,25 @@ async def logout(request: Request, response: Response):
     return {"message": "Logged out successfully"}
 
 # ==================== RESTAURANT ROUTES ====================
+
+@api_router.post("/seed")
+async def seed_database():
+    """Stubbed seed route. Use python seed_gold_standard.py instead."""
+    return {"message": "Seeding is handled via external script on this branch."}
+
+@api_router.get("/categories")
+async def get_categories():
+    """Get all available food categories"""
+    return [
+        {"id": "filipino", "name": "Lutong Bahay", "icon": "🥘"},
+        {"id": "street_food", "name": "Street Food", "icon": "🍢"},
+        {"id": "chicken", "name": "Manok", "icon": "🍗"},
+        {"id": "pork", "name": "Baboy", "icon": "🥩"},
+        {"id": "seafood", "name": "Seafood", "icon": "🦐"},
+        {"id": "noodles", "name": "Pancit", "icon": "🍜"},
+        {"id": "desserts", "name": "Panghimagas", "icon": "🍧"},
+        {"id": "deals", "name": "Sulong Promos", "icon": "🏷️"}
+    ]
 
 @api_router.get("/restaurants")
 async def get_restaurants(cuisine: Optional[str] = None, search: Optional[str] = None, area: Optional[str] = None):

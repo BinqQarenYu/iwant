@@ -52,16 +52,16 @@ const RoleBasedRedirect = () => {
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
-        <div className="animate-spin w-8 h-8 border-4 border-[#FF6B00] border-t-transparent rounded-full"></div>
+        <div className="animate-spin w-8 h-8 border-4 border-[var(--primary)] border-t-transparent rounded-full"></div>
       </div>
     );
   }
 
-  if (!user) {
+  if (!user || user.role === 'customer') {
     return <HomePage />;
   }
 
-  // All authenticated users go to The Sync Dashboard
+  // Dashboard users (merchant, rider, admin) go to their respective portal
   return <Navigate to="/dashboard" replace />;
 };
 
