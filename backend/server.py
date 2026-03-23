@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, status
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Response
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
@@ -10,9 +10,7 @@ from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Optional
 import uuid
 from datetime import datetime, timezone, timedelta
-import jwt
-import random
-import string
+import httpx
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -22,13 +20,11 @@ mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
 
-# JWT Configuration
-JWT_SECRET = os.environ.get('JWT_SECRET', 'kayntayo-secret-key-2024')
-JWT_ALGORITHM = "HS256"
-JWT_EXPIRATION_HOURS = 24 * 7  # 1 week
+# Emergent Auth URL
+EMERGENT_AUTH_URL = "https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data"
 
 # Create the main app
-app = FastAPI(title="KainTayo - Urdaneta Food Delivery")
+app = FastAPI(title="KainTayo - The Sync Dashboard")
 
 # Create a router with the /api prefix
 api_router = APIRouter(prefix="/api")
@@ -41,31 +37,29 @@ logger = logging.getLogger(__name__)
 
 # ==================== MODELS ====================
 
-class UserBase(BaseModel):
+class User(BaseModel):
     model_config = ConfigDict(extra="ignore")
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    phone: str
+    user_id: str = Field(default_factory=lambda: f"user_{uuid.uuid4().hex[:12]}")
+    email: str
     name: str
-    role: str = "customer"  # customer, restaurant_owner, driver, admin
-    language: str = "en"  # en, tl (Tagalog)
-    address: Optional[str] = None
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-
-class UserCreate(BaseModel):
-    phone: str
-    name: str
-    role: str = "customer"
+    picture: Optional[str] = None
+    role: str = "customer"  # customer, rider, merchant, admin
     language: str = "en"
     address: Optional[str] = None
+    phone: Optional[str] = None
+    is_active: bool = True
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
-class OTPRequest(BaseModel):
-    phone: str
+class UserSession(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    user_id: str
+    session_token: str
+    expires_at: datetime
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
-class OTPVerify(BaseModel):
-    phone: str
-    otp: str
-    name: Optional[str] = None
-    role: str = "customer"
+class RoleSwitch(BaseModel):
+    role: str
 
 class Restaurant(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -75,6 +69,9 @@ class Restaurant(BaseModel):
     description: str
     cuisine_type: str
     address: str
+    area: str = "Urdaneta City"
+    lat: Optional[float] = None
+    lng: Optional[float] = None
     phone: str
     image_url: Optional[str] = None
     is_open: bool = True
@@ -132,11 +129,13 @@ class Order(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     customer_id: str
     customer_name: str
-    customer_phone: str
+    customer_phone: Optional[str] = None
+    customer_email: str
     restaurant_id: str
     restaurant_name: str
-    driver_id: Optional[str] = None
-    driver_name: Optional[str] = None
+    rider_id: Optional[str] = None
+    rider_name: Optional[str] = None
+    rider_phone: Optional[str] = None
     items: List[OrderItem]
     subtotal: float
     delivery_fee: float
@@ -144,18 +143,27 @@ class Order(BaseModel):
     promo_code: Optional[str] = None
     total: float
     delivery_address: str
+    delivery_lat: Optional[float] = None
+    delivery_lng: Optional[float] = None
     area: Optional[str] = None
-    payment_method: str  # cod, gcash, paymaya
-    payment_status: str = "pending"  # pending, paid, failed
+    payment_method: str
+    payment_status: str = "pending"
     order_status: str = "pending"  # pending, confirmed, preparing, ready, picked_up, delivered, cancelled
     special_instructions: Optional[str] = None
+    estimated_delivery: Optional[str] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    confirmed_at: Optional[datetime] = None
+    ready_at: Optional[datetime] = None
+    picked_up_at: Optional[datetime] = None
+    delivered_at: Optional[datetime] = None
 
 class OrderCreate(BaseModel):
     restaurant_id: str
     items: List[CartItem]
     delivery_address: str
+    delivery_lat: Optional[float] = None
+    delivery_lng: Optional[float] = None
     area: Optional[str] = None
     payment_method: str
     promo_code: Optional[str] = None
@@ -166,10 +174,10 @@ class PabiliRequest(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     customer_id: str
     customer_name: str
-    customer_phone: str
-    driver_id: Optional[str] = None
-    driver_name: Optional[str] = None
-    items_list: str  # Text description of items to buy
+    customer_email: str
+    rider_id: Optional[str] = None
+    rider_name: Optional[str] = None
+    items_list: str
     store_location: str
     delivery_address: str
     estimated_budget: float
@@ -178,7 +186,7 @@ class PabiliRequest(BaseModel):
     total: Optional[float] = None
     payment_method: str
     payment_status: str = "pending"
-    status: str = "pending"  # pending, accepted, shopping, delivering, completed, cancelled
+    status: str = "pending"
     notes: Optional[str] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -191,39 +199,47 @@ class PabiliCreate(BaseModel):
     payment_method: str
     notes: Optional[str] = None
 
-class DriverProfile(BaseModel):
+class RiderProfile(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     user_id: str
     vehicle_type: str  # motorcycle, tricycle
     plate_number: str
-    is_available: bool = False
-    current_location: Optional[str] = None
+    is_online: bool = False
+    is_on_delivery: bool = False
+    current_order_id: Optional[str] = None
+    current_lat: Optional[float] = None
+    current_lng: Optional[float] = None
     total_deliveries: int = 0
     total_earnings: float = 0.0
     rating: float = 5.0
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    last_location_update: Optional[datetime] = None
 
-class DriverProfileCreate(BaseModel):
+class RiderProfileCreate(BaseModel):
     vehicle_type: str
     plate_number: str
+
+class RiderLocationUpdate(BaseModel):
+    lat: float
+    lng: float
 
 class PromoCode(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    code: str  # e.g., "WELCOME50", "FREEDEL"
+    code: str
     description: str
-    discount_type: str  # "percentage", "fixed", "free_delivery"
-    discount_value: float  # percentage (0-100) or fixed amount
-    min_order: float = 0.0  # minimum order to apply
-    max_discount: Optional[float] = None  # cap for percentage discounts
-    usage_limit: Optional[int] = None  # total uses allowed
+    discount_type: str
+    discount_value: float
+    min_order: float = 0.0
+    max_discount: Optional[float] = None
+    usage_limit: Optional[int] = None
     usage_count: int = 0
-    per_user_limit: int = 1  # uses per user
+    per_user_limit: int = 1
     valid_from: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     valid_until: Optional[datetime] = None
     is_active: bool = True
-    applicable_areas: Optional[List[str]] = None  # None = all areas
+    applicable_areas: Optional[List[str]] = None
     first_order_only: bool = False
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -246,110 +262,139 @@ class PromoCodeApply(BaseModel):
     delivery_fee: float
     area: Optional[str] = None
 
-class PromoUsage(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    promo_id: str
-    promo_code: str
-    user_id: str
-    order_id: Optional[str] = None
-    discount_applied: float
-    used_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-
 # ==================== AUTH HELPERS ====================
 
-otp_store = {}  # In production, use Redis
-
-def generate_otp():
-    return ''.join(random.choices(string.digits, k=6))
-
-def create_token(user_id: str, role: str):
-    payload = {
-        "user_id": user_id,
-        "role": role,
-        "exp": datetime.now(timezone.utc) + timedelta(hours=JWT_EXPIRATION_HOURS)
-    }
-    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
-
-async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    if not credentials:
+async def get_current_user(request: Request, credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """Get current user from session token (cookie or header)"""
+    session_token = None
+    
+    # Try cookie first
+    session_token = request.cookies.get("session_token")
+    
+    # Fallback to Authorization header
+    if not session_token and credentials:
+        session_token = credentials.credentials
+    
+    if not session_token:
         raise HTTPException(status_code=401, detail="Not authenticated")
-    try:
-        payload = jwt.decode(credentials.credentials, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-        user = await db.users.find_one({"id": payload["user_id"]}, {"_id": 0})
-        if not user:
-            raise HTTPException(status_code=401, detail="User not found")
-        return user
-    except jwt.ExpiredSignatureError:
-        raise HTTPException(status_code=401, detail="Token expired")
-    except jwt.InvalidTokenError:
-        raise HTTPException(status_code=401, detail="Invalid token")
+    
+    # Find session
+    session = await db.user_sessions.find_one({"session_token": session_token}, {"_id": 0})
+    if not session:
+        raise HTTPException(status_code=401, detail="Invalid session")
+    
+    # Check expiry
+    expires_at = session["expires_at"]
+    if isinstance(expires_at, str):
+        expires_at = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if expires_at < datetime.now(timezone.utc):
+        await db.user_sessions.delete_one({"session_token": session_token})
+        raise HTTPException(status_code=401, detail="Session expired")
+    
+    # Get user
+    user = await db.users.find_one({"user_id": session["user_id"]}, {"_id": 0})
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    
+    return user
 
-async def get_optional_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    if not credentials:
-        return None
+async def get_optional_user(request: Request, credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """Get current user if authenticated, None otherwise"""
     try:
-        payload = jwt.decode(credentials.credentials, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-        user = await db.users.find_one({"id": payload["user_id"]}, {"_id": 0})
-        return user
+        return await get_current_user(request, credentials)
     except:
         return None
 
 # ==================== AUTH ROUTES ====================
 
-@api_router.post("/auth/send-otp")
-async def send_otp(request: OTPRequest):
-    """Send OTP to phone number (mock - in production use Twilio)"""
-    otp = generate_otp()
-    otp_store[request.phone] = {
-        "otp": otp,
-        "expires": datetime.now(timezone.utc) + timedelta(minutes=5)
-    }
-    # In production, send via Twilio SMS
-    logger.info(f"OTP for {request.phone}: {otp}")  # For testing
-    return {"message": "OTP sent successfully", "debug_otp": otp}  # Remove debug_otp in production
-
-@api_router.post("/auth/verify-otp")
-async def verify_otp(request: OTPVerify):
-    """Verify OTP and login/register user"""
-    stored = otp_store.get(request.phone)
-    if not stored:
-        raise HTTPException(status_code=400, detail="OTP not found. Please request a new one.")
+@api_router.post("/auth/session")
+async def exchange_session(request: Request, response: Response):
+    """Exchange session_id for session_token"""
+    body = await request.json()
+    session_id = body.get("session_id")
     
-    if datetime.now(timezone.utc) > stored["expires"]:
-        del otp_store[request.phone]
-        raise HTTPException(status_code=400, detail="OTP expired. Please request a new one.")
+    if not session_id:
+        raise HTTPException(status_code=400, detail="session_id required")
     
-    if stored["otp"] != request.otp:
-        raise HTTPException(status_code=400, detail="Invalid OTP")
+    # Call Emergent Auth to get user data
+    async with httpx.AsyncClient() as client:
+        try:
+            auth_response = await client.get(
+                EMERGENT_AUTH_URL,
+                headers={"X-Session-ID": session_id}
+            )
+            if auth_response.status_code != 200:
+                raise HTTPException(status_code=401, detail="Invalid session_id")
+            
+            auth_data = auth_response.json()
+        except Exception as e:
+            logger.error(f"Auth error: {e}")
+            raise HTTPException(status_code=401, detail="Authentication failed")
     
-    del otp_store[request.phone]
+    email = auth_data.get("email")
+    name = auth_data.get("name")
+    picture = auth_data.get("picture")
+    session_token = auth_data.get("session_token")
+    
+    if not email or not session_token:
+        raise HTTPException(status_code=401, detail="Invalid auth response")
     
     # Check if user exists
-    user = await db.users.find_one({"phone": request.phone}, {"_id": 0})
+    existing_user = await db.users.find_one({"email": email}, {"_id": 0})
     
-    if user:
-        token = create_token(user["id"], user["role"])
-        return {"token": token, "user": user, "is_new": False}
+    if existing_user:
+        user_id = existing_user["user_id"]
+        # Update user info
+        await db.users.update_one(
+            {"user_id": user_id},
+            {"$set": {"name": name, "picture": picture}}
+        )
+    else:
+        # Create new user
+        user_id = f"user_{uuid.uuid4().hex[:12]}"
+        new_user = {
+            "user_id": user_id,
+            "email": email,
+            "name": name,
+            "picture": picture,
+            "role": "customer",  # Default role
+            "language": "en",
+            "is_active": True,
+            "created_at": datetime.now(timezone.utc).isoformat()
+        }
+        await db.users.insert_one(new_user)
     
-    # Create new user
-    if not request.name:
-        raise HTTPException(status_code=400, detail="Name is required for new users")
+    # Create session
+    expires_at = datetime.now(timezone.utc) + timedelta(days=7)
+    session_doc = {
+        "id": str(uuid.uuid4()),
+        "user_id": user_id,
+        "session_token": session_token,
+        "expires_at": expires_at.isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
     
-    new_user = UserBase(
-        phone=request.phone,
-        name=request.name,
-        role=request.role
+    # Remove old sessions for this user
+    await db.user_sessions.delete_many({"user_id": user_id})
+    await db.user_sessions.insert_one(session_doc)
+    
+    # Set cookie
+    response.set_cookie(
+        key="session_token",
+        value=session_token,
+        httponly=True,
+        secure=True,
+        samesite="none",
+        path="/",
+        max_age=7 * 24 * 60 * 60  # 7 days
     )
-    user_dict = new_user.model_dump()
-    user_dict["created_at"] = user_dict["created_at"].isoformat()
-    await db.users.insert_one(user_dict)
     
-    # Remove _id if it was added by MongoDB
-    user_dict.pop("_id", None)
+    # Get updated user
+    user = await db.users.find_one({"user_id": user_id}, {"_id": 0})
     
-    token = create_token(new_user.id, new_user.role)
-    return {"token": token, "user": user_dict, "is_new": True}
+    return {"user": user, "session_token": session_token}
 
 @api_router.get("/auth/me")
 async def get_me(user = Depends(get_current_user)):
@@ -359,21 +404,55 @@ async def get_me(user = Depends(get_current_user)):
 @api_router.put("/auth/profile")
 async def update_profile(updates: dict, user = Depends(get_current_user)):
     """Update user profile"""
-    allowed_fields = ["name", "address", "language"]
+    allowed_fields = ["name", "address", "language", "phone"]
     update_data = {k: v for k, v in updates.items() if k in allowed_fields}
     if update_data:
-        await db.users.update_one({"id": user["id"]}, {"$set": update_data})
-    updated_user = await db.users.find_one({"id": user["id"]}, {"_id": 0})
+        await db.users.update_one({"user_id": user["user_id"]}, {"$set": update_data})
+    updated_user = await db.users.find_one({"user_id": user["user_id"]}, {"_id": 0})
     return updated_user
+
+@api_router.put("/auth/switch-role")
+async def switch_role(data: RoleSwitch, user = Depends(get_current_user)):
+    """Switch user role (for The Sync Dashboard)"""
+    valid_roles = ["customer", "rider", "merchant", "admin"]
+    if data.role not in valid_roles:
+        raise HTTPException(status_code=400, detail=f"Invalid role. Must be one of: {valid_roles}")
+    
+    await db.users.update_one({"user_id": user["user_id"]}, {"$set": {"role": data.role}})
+    
+    # If switching to rider, ensure rider profile exists
+    if data.role == "rider":
+        existing_profile = await db.rider_profiles.find_one({"user_id": user["user_id"]}, {"_id": 0})
+        if not existing_profile:
+            # Create default rider profile
+            profile = RiderProfile(user_id=user["user_id"], vehicle_type="motorcycle", plate_number="TBD")
+            doc = profile.model_dump()
+            doc["created_at"] = doc["created_at"].isoformat()
+            await db.rider_profiles.insert_one(doc)
+    
+    updated_user = await db.users.find_one({"user_id": user["user_id"]}, {"_id": 0})
+    return updated_user
+
+@api_router.post("/auth/logout")
+async def logout(request: Request, response: Response):
+    """Logout user"""
+    session_token = request.cookies.get("session_token")
+    if session_token:
+        await db.user_sessions.delete_one({"session_token": session_token})
+    
+    response.delete_cookie(key="session_token", path="/", secure=True, samesite="none")
+    return {"message": "Logged out successfully"}
 
 # ==================== RESTAURANT ROUTES ====================
 
 @api_router.get("/restaurants")
-async def get_restaurants(cuisine: Optional[str] = None, search: Optional[str] = None):
+async def get_restaurants(cuisine: Optional[str] = None, search: Optional[str] = None, area: Optional[str] = None):
     """Get all approved restaurants"""
     query = {"is_approved": True}
     if cuisine:
         query["cuisine_type"] = cuisine
+    if area and area != "all":
+        query["area"] = {"$regex": area, "$options": "i"}
     if search:
         query["$or"] = [
             {"name": {"$regex": search, "$options": "i"}},
@@ -393,11 +472,11 @@ async def get_restaurant(restaurant_id: str):
 
 @api_router.post("/restaurants", response_model=Restaurant)
 async def create_restaurant(data: RestaurantCreate, user = Depends(get_current_user)):
-    """Create a new restaurant (for restaurant owners)"""
-    if user["role"] not in ["restaurant_owner", "admin"]:
-        raise HTTPException(status_code=403, detail="Only restaurant owners can create restaurants")
+    """Create a new restaurant (for merchants)"""
+    if user["role"] not in ["merchant", "admin"]:
+        raise HTTPException(status_code=403, detail="Only merchants can create restaurants")
     
-    restaurant = Restaurant(owner_id=user["id"], **data.model_dump())
+    restaurant = Restaurant(owner_id=user["user_id"], **data.model_dump())
     doc = restaurant.model_dump()
     doc["created_at"] = doc["created_at"].isoformat()
     await db.restaurants.insert_one(doc)
@@ -409,7 +488,7 @@ async def update_restaurant(restaurant_id: str, updates: dict, user = Depends(ge
     restaurant = await db.restaurants.find_one({"id": restaurant_id}, {"_id": 0})
     if not restaurant:
         raise HTTPException(status_code=404, detail="Restaurant not found")
-    if restaurant["owner_id"] != user["id"] and user["role"] != "admin":
+    if restaurant["owner_id"] != user["user_id"] and user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Not authorized")
     
     allowed_fields = ["name", "description", "cuisine_type", "address", "phone", "image_url", 
@@ -422,9 +501,9 @@ async def update_restaurant(restaurant_id: str, updates: dict, user = Depends(ge
 @api_router.get("/my-restaurant")
 async def get_my_restaurant(user = Depends(get_current_user)):
     """Get restaurant owned by current user"""
-    if user["role"] not in ["restaurant_owner", "admin"]:
-        raise HTTPException(status_code=403, detail="Not a restaurant owner")
-    restaurant = await db.restaurants.find_one({"owner_id": user["id"]}, {"_id": 0})
+    if user["role"] not in ["merchant", "admin"]:
+        raise HTTPException(status_code=403, detail="Not a merchant")
+    restaurant = await db.restaurants.find_one({"owner_id": user["user_id"]}, {"_id": 0})
     return restaurant
 
 # ==================== MENU ROUTES ====================
@@ -435,7 +514,7 @@ async def add_menu_item(restaurant_id: str, data: MenuItemCreate, user = Depends
     restaurant = await db.restaurants.find_one({"id": restaurant_id}, {"_id": 0})
     if not restaurant:
         raise HTTPException(status_code=404, detail="Restaurant not found")
-    if restaurant["owner_id"] != user["id"] and user["role"] != "admin":
+    if restaurant["owner_id"] != user["user_id"] and user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Not authorized")
     
     item = MenuItem(restaurant_id=restaurant_id, **data.model_dump())
@@ -451,7 +530,7 @@ async def update_menu_item(item_id: str, updates: dict, user = Depends(get_curre
     if not item:
         raise HTTPException(status_code=404, detail="Menu item not found")
     restaurant = await db.restaurants.find_one({"id": item["restaurant_id"]}, {"_id": 0})
-    if restaurant["owner_id"] != user["id"] and user["role"] != "admin":
+    if restaurant["owner_id"] != user["user_id"] and user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Not authorized")
     
     allowed_fields = ["name", "description", "price", "category", "image_url", "is_available"]
@@ -467,7 +546,7 @@ async def delete_menu_item(item_id: str, user = Depends(get_current_user)):
     if not item:
         raise HTTPException(status_code=404, detail="Menu item not found")
     restaurant = await db.restaurants.find_one({"id": item["restaurant_id"]}, {"_id": 0})
-    if restaurant["owner_id"] != user["id"] and user["role"] != "admin":
+    if restaurant["owner_id"] != user["user_id"] and user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Not authorized")
     await db.menu_items.delete_one({"id": item_id})
     return {"message": "Item deleted"}
@@ -511,57 +590,26 @@ async def create_order(data: OrderCreate, user = Depends(get_current_user)):
     promo_code = None
     if data.promo_code:
         promo_code = data.promo_code.upper()
-        promo = await db.promo_codes.find_one({"code": promo_code}, {"_id": 0})
-        
-        if promo and promo.get("is_active", False):
-            # Validate promo
-            now = datetime.now(timezone.utc)
-            valid = True
-            
-            # Check per-user limit
-            user_usage = await db.promo_usage.count_documents({
-                "promo_id": promo["id"],
-                "user_id": user["id"]
-            })
-            if user_usage >= promo.get("per_user_limit", 1):
-                valid = False
-            
-            # Check first order only
-            if promo.get("first_order_only", False):
-                user_orders = await db.orders.count_documents({"customer_id": user["id"]})
-                if user_orders > 0:
-                    valid = False
-            
-            # Check min order
-            if subtotal < promo.get("min_order", 0):
-                valid = False
-            
-            if valid:
-                # Calculate discount
-                discount_type = promo["discount_type"]
-                discount_value = promo["discount_value"]
-                
-                if discount_type == "free_delivery":
-                    discount = restaurant["delivery_fee"]
-                elif discount_type == "percentage":
-                    discount = subtotal * (discount_value / 100)
-                    if promo.get("max_discount"):
-                        discount = min(discount, promo["max_discount"])
-                elif discount_type == "fixed":
-                    discount = min(discount_value, subtotal + restaurant["delivery_fee"])
-                
-                # Record promo usage
-                await db.promo_codes.update_one(
-                    {"id": promo["id"]},
-                    {"$inc": {"usage_count": 1}}
-                )
+        promo = await db.promo_codes.find_one({"code": promo_code, "is_active": True}, {"_id": 0})
+        if promo:
+            discount_type = promo["discount_type"]
+            discount_value = promo["discount_value"]
+            if discount_type == "free_delivery":
+                discount = restaurant["delivery_fee"]
+            elif discount_type == "percentage":
+                discount = subtotal * (discount_value / 100)
+                if promo.get("max_discount"):
+                    discount = min(discount, promo["max_discount"])
+            elif discount_type == "fixed":
+                discount = min(discount_value, subtotal + restaurant["delivery_fee"])
     
     total = subtotal + restaurant["delivery_fee"] - discount
     
     order = Order(
-        customer_id=user["id"],
+        customer_id=user["user_id"],
         customer_name=user["name"],
-        customer_phone=user["phone"],
+        customer_email=user["email"],
+        customer_phone=user.get("phone"),
         restaurant_id=restaurant["id"],
         restaurant_name=restaurant["name"],
         items=order_items,
@@ -571,9 +619,12 @@ async def create_order(data: OrderCreate, user = Depends(get_current_user)):
         promo_code=promo_code if discount > 0 else None,
         total=total,
         delivery_address=data.delivery_address,
-        area=data.area,
+        delivery_lat=data.delivery_lat,
+        delivery_lng=data.delivery_lng,
+        area=data.area or restaurant.get("area", "Urdaneta City"),
         payment_method=data.payment_method,
-        special_instructions=data.special_instructions
+        special_instructions=data.special_instructions,
+        estimated_delivery=restaurant["estimated_delivery_time"]
     )
     
     doc = order.model_dump()
@@ -581,41 +632,34 @@ async def create_order(data: OrderCreate, user = Depends(get_current_user)):
     doc["updated_at"] = doc["updated_at"].isoformat()
     await db.orders.insert_one(doc)
     
-    # Record promo usage with order ID
-    if promo_code and discount > 0:
-        promo = await db.promo_codes.find_one({"code": promo_code}, {"_id": 0})
-        if promo:
-            usage = PromoUsage(
-                promo_id=promo["id"],
-                promo_code=promo_code,
-                user_id=user["id"],
-                order_id=order.id,
-                discount_applied=discount
-            )
-            usage_doc = usage.model_dump()
-            usage_doc["used_at"] = usage_doc["used_at"].isoformat()
-            await db.promo_usage.insert_one(usage_doc)
-    
     return order
 
 @api_router.get("/orders")
-async def get_orders(user = Depends(get_current_user)):
+async def get_orders(user = Depends(get_current_user), status: Optional[str] = None):
     """Get orders based on user role"""
-    if user["role"] == "customer":
-        query = {"customer_id": user["id"]}
-    elif user["role"] == "restaurant_owner":
-        restaurant = await db.restaurants.find_one({"owner_id": user["id"]}, {"_id": 0})
-        if not restaurant:
-            return []
-        query = {"restaurant_id": restaurant["id"]}
-    elif user["role"] == "driver":
-        query = {"$or": [{"driver_id": user["id"]}, {"driver_id": None, "order_status": "ready"}]}
-    elif user["role"] == "admin":
-        query = {}
-    else:
-        query = {"customer_id": user["id"]}
+    query = {}
     
-    orders = await db.orders.find(query, {"_id": 0}).sort("created_at", -1).to_list(100)
+    if user["role"] == "customer":
+        query = {"customer_id": user["user_id"]}
+    elif user["role"] == "merchant":
+        restaurant = await db.restaurants.find_one({"owner_id": user["user_id"]}, {"_id": 0})
+        if restaurant:
+            query = {"restaurant_id": restaurant["id"]}
+        else:
+            return []
+    elif user["role"] == "rider":
+        # Show available orders (ready for pickup) or assigned orders
+        query = {"$or": [
+            {"rider_id": user["user_id"]},
+            {"rider_id": None, "order_status": "ready"}
+        ]}
+    elif user["role"] == "admin":
+        query = {}  # Admin sees all
+    
+    if status:
+        query["order_status"] = status
+    
+    orders = await db.orders.find(query, {"_id": 0}).sort("created_at", -1).to_list(200)
     return orders
 
 @api_router.get("/orders/{order_id}")
@@ -624,11 +668,6 @@ async def get_order(order_id: str, user = Depends(get_current_user)):
     order = await db.orders.find_one({"id": order_id}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
-    
-    # Check authorization
-    if user["role"] == "customer" and order["customer_id"] != user["id"]:
-        raise HTTPException(status_code=403, detail="Not authorized")
-    
     return order
 
 @api_router.put("/orders/{order_id}/status")
@@ -640,48 +679,170 @@ async def update_order_status(order_id: str, status: str, user = Depends(get_cur
     
     valid_statuses = ["pending", "confirmed", "preparing", "ready", "picked_up", "delivered", "cancelled"]
     if status not in valid_statuses:
-        raise HTTPException(status_code=400, detail=f"Invalid status. Must be one of: {valid_statuses}")
+        raise HTTPException(status_code=400, detail=f"Invalid status")
     
     update_data = {
         "order_status": status,
         "updated_at": datetime.now(timezone.utc).isoformat()
     }
     
+    # Track timestamps
+    if status == "confirmed":
+        update_data["confirmed_at"] = datetime.now(timezone.utc).isoformat()
+    elif status == "ready":
+        update_data["ready_at"] = datetime.now(timezone.utc).isoformat()
+    elif status == "picked_up":
+        update_data["picked_up_at"] = datetime.now(timezone.utc).isoformat()
+    elif status == "delivered":
+        update_data["delivered_at"] = datetime.now(timezone.utc).isoformat()
+        # Update rider stats
+        if order.get("rider_id"):
+            await db.rider_profiles.update_one(
+                {"user_id": order["rider_id"]},
+                {
+                    "$inc": {"total_deliveries": 1, "total_earnings": order["delivery_fee"]},
+                    "$set": {"is_on_delivery": False, "current_order_id": None}
+                }
+            )
+    
     await db.orders.update_one({"id": order_id}, {"$set": update_data})
     return await db.orders.find_one({"id": order_id}, {"_id": 0})
 
-@api_router.put("/orders/{order_id}/assign-driver")
-async def assign_driver(order_id: str, user = Depends(get_current_user)):
-    """Driver accepts/assigns themselves to an order"""
-    if user["role"] != "driver":
-        raise HTTPException(status_code=403, detail="Only drivers can accept orders")
+@api_router.put("/orders/{order_id}/assign-rider")
+async def assign_rider(order_id: str, user = Depends(get_current_user)):
+    """Rider accepts/assigns themselves to an order"""
+    if user["role"] != "rider":
+        raise HTTPException(status_code=403, detail="Only riders can accept orders")
     
     order = await db.orders.find_one({"id": order_id}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
-    
-    if order["driver_id"]:
-        raise HTTPException(status_code=400, detail="Order already has a driver")
+    if order.get("rider_id"):
+        raise HTTPException(status_code=400, detail="Order already has a rider")
     
     update_data = {
-        "driver_id": user["id"],
-        "driver_name": user["name"],
+        "rider_id": user["user_id"],
+        "rider_name": user["name"],
+        "rider_phone": user.get("phone"),
         "order_status": "picked_up" if order["order_status"] == "ready" else order["order_status"],
         "updated_at": datetime.now(timezone.utc).isoformat()
     }
     
     await db.orders.update_one({"id": order_id}, {"$set": update_data})
+    
+    # Update rider profile
+    await db.rider_profiles.update_one(
+        {"user_id": user["user_id"]},
+        {"$set": {"is_on_delivery": True, "current_order_id": order_id}}
+    )
+    
     return await db.orders.find_one({"id": order_id}, {"_id": 0})
+
+# ==================== RIDER ROUTES ====================
+
+@api_router.post("/rider/profile", response_model=RiderProfile)
+async def create_rider_profile(data: RiderProfileCreate, user = Depends(get_current_user)):
+    """Create rider profile"""
+    existing = await db.rider_profiles.find_one({"user_id": user["user_id"]}, {"_id": 0})
+    if existing:
+        raise HTTPException(status_code=400, detail="Rider profile already exists")
+    
+    profile = RiderProfile(user_id=user["user_id"], **data.model_dump())
+    doc = profile.model_dump()
+    doc["created_at"] = doc["created_at"].isoformat()
+    await db.rider_profiles.insert_one(doc)
+    
+    # Update user role to rider
+    await db.users.update_one({"user_id": user["user_id"]}, {"$set": {"role": "rider"}})
+    
+    return profile
+
+@api_router.get("/rider/profile")
+async def get_rider_profile(user = Depends(get_current_user)):
+    """Get rider profile"""
+    profile = await db.rider_profiles.find_one({"user_id": user["user_id"]}, {"_id": 0})
+    if not profile:
+        raise HTTPException(status_code=404, detail="Rider profile not found")
+    return profile
+
+@api_router.put("/rider/online")
+async def toggle_rider_online(is_online: bool, user = Depends(get_current_user)):
+    """Toggle rider online status"""
+    await db.rider_profiles.update_one(
+        {"user_id": user["user_id"]},
+        {"$set": {"is_online": is_online}}
+    )
+    return {"is_online": is_online}
+
+@api_router.put("/rider/location")
+async def update_rider_location(data: RiderLocationUpdate, user = Depends(get_current_user)):
+    """Update rider location"""
+    await db.rider_profiles.update_one(
+        {"user_id": user["user_id"]},
+        {"$set": {
+            "current_lat": data.lat,
+            "current_lng": data.lng,
+            "last_location_update": datetime.now(timezone.utc).isoformat()
+        }}
+    )
+    return {"lat": data.lat, "lng": data.lng}
+
+@api_router.get("/rider/earnings")
+async def get_rider_earnings(user = Depends(get_current_user)):
+    """Get rider earnings summary"""
+    profile = await db.rider_profiles.find_one({"user_id": user["user_id"]}, {"_id": 0})
+    if not profile:
+        return {"total_deliveries": 0, "total_earnings": 0}
+    
+    # Get today's deliveries
+    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    today_orders = await db.orders.find({
+        "rider_id": user["user_id"],
+        "order_status": "delivered",
+        "delivered_at": {"$gte": today_start.isoformat()}
+    }, {"_id": 0}).to_list(100)
+    
+    today_earnings = sum(o.get("delivery_fee", 0) for o in today_orders)
+    
+    return {
+        "total_deliveries": profile.get("total_deliveries", 0),
+        "total_earnings": profile.get("total_earnings", 0),
+        "today_deliveries": len(today_orders),
+        "today_earnings": today_earnings,
+        "rating": profile.get("rating", 5.0)
+    }
+
+@api_router.get("/riders/all")
+async def get_all_riders(user = Depends(get_current_user)):
+    """Get all riders (admin only)"""
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    riders = await db.rider_profiles.find({}, {"_id": 0}).to_list(500)
+    
+    # Enrich with user data
+    enriched_riders = []
+    for rider in riders:
+        rider_user = await db.users.find_one({"user_id": rider["user_id"]}, {"_id": 0})
+        if rider_user:
+            enriched_riders.append({
+                **rider,
+                "name": rider_user.get("name"),
+                "email": rider_user.get("email"),
+                "phone": rider_user.get("phone")
+            })
+    
+    return enriched_riders
 
 # ==================== PABILI ROUTES ====================
 
 @api_router.post("/pabili", response_model=PabiliRequest, status_code=201)
 async def create_pabili_request(data: PabiliCreate, user = Depends(get_current_user)):
-    """Create a Pabili (grocery/errand) request"""
+    """Create a Pabili request"""
     pabili = PabiliRequest(
-        customer_id=user["id"],
+        customer_id=user["user_id"],
         customer_name=user["name"],
-        customer_phone=user["phone"],
+        customer_email=user["email"],
         items_list=data.items_list,
         store_location=data.store_location,
         delivery_address=data.delivery_address,
@@ -699,148 +860,98 @@ async def create_pabili_request(data: PabiliCreate, user = Depends(get_current_u
 
 @api_router.get("/pabili")
 async def get_pabili_requests(user = Depends(get_current_user)):
-    """Get Pabili requests based on user role"""
+    """Get Pabili requests"""
     if user["role"] == "customer":
-        query = {"customer_id": user["id"]}
-    elif user["role"] == "driver":
-        query = {"$or": [{"driver_id": user["id"]}, {"driver_id": None, "status": "pending"}]}
+        query = {"customer_id": user["user_id"]}
+    elif user["role"] == "rider":
+        query = {"$or": [{"rider_id": user["user_id"]}, {"rider_id": None, "status": "pending"}]}
     elif user["role"] == "admin":
         query = {}
     else:
-        query = {"customer_id": user["id"]}
+        query = {"customer_id": user["user_id"]}
     
     requests = await db.pabili_requests.find(query, {"_id": 0}).sort("created_at", -1).to_list(100)
     return requests
 
-@api_router.get("/pabili/{pabili_id}")
-async def get_pabili_request(pabili_id: str, user = Depends(get_current_user)):
-    """Get Pabili request details"""
-    pabili = await db.pabili_requests.find_one({"id": pabili_id}, {"_id": 0})
-    if not pabili:
-        raise HTTPException(status_code=404, detail="Pabili request not found")
-    return pabili
-
 @api_router.put("/pabili/{pabili_id}/accept")
-async def accept_pabili_request(pabili_id: str, user = Depends(get_current_user)):
-    """Driver accepts a Pabili request"""
-    if user["role"] != "driver":
-        raise HTTPException(status_code=403, detail="Only drivers can accept Pabili requests")
+async def accept_pabili(pabili_id: str, user = Depends(get_current_user)):
+    """Rider accepts Pabili request"""
+    if user["role"] != "rider":
+        raise HTTPException(status_code=403, detail="Only riders can accept")
     
     pabili = await db.pabili_requests.find_one({"id": pabili_id}, {"_id": 0})
     if not pabili:
-        raise HTTPException(status_code=404, detail="Pabili request not found")
+        raise HTTPException(status_code=404, detail="Not found")
+    if pabili.get("rider_id"):
+        raise HTTPException(status_code=400, detail="Already accepted")
     
-    if pabili["driver_id"]:
-        raise HTTPException(status_code=400, detail="Request already accepted by another driver")
-    
-    update_data = {
-        "driver_id": user["id"],
-        "driver_name": user["name"],
+    await db.pabili_requests.update_one({"id": pabili_id}, {"$set": {
+        "rider_id": user["user_id"],
+        "rider_name": user["name"],
         "status": "accepted",
         "updated_at": datetime.now(timezone.utc).isoformat()
-    }
+    }})
     
-    await db.pabili_requests.update_one({"id": pabili_id}, {"$set": update_data})
     return await db.pabili_requests.find_one({"id": pabili_id}, {"_id": 0})
 
 @api_router.put("/pabili/{pabili_id}/status")
-async def update_pabili_status(pabili_id: str, status: str, actual_cost: Optional[float] = None, user = Depends(get_current_user)):
-    """Update Pabili request status"""
-    pabili = await db.pabili_requests.find_one({"id": pabili_id}, {"_id": 0})
-    if not pabili:
-        raise HTTPException(status_code=404, detail="Pabili request not found")
-    
+async def update_pabili_status(pabili_id: str, status: str, user = Depends(get_current_user)):
+    """Update Pabili status"""
     valid_statuses = ["pending", "accepted", "shopping", "delivering", "completed", "cancelled"]
     if status not in valid_statuses:
-        raise HTTPException(status_code=400, detail=f"Invalid status. Must be one of: {valid_statuses}")
+        raise HTTPException(status_code=400, detail="Invalid status")
     
-    update_data = {
+    await db.pabili_requests.update_one({"id": pabili_id}, {"$set": {
         "status": status,
         "updated_at": datetime.now(timezone.utc).isoformat()
-    }
+    }})
     
-    if actual_cost is not None:
-        update_data["actual_cost"] = actual_cost
-        update_data["total"] = actual_cost + pabili["service_fee"]
-    
-    await db.pabili_requests.update_one({"id": pabili_id}, {"$set": update_data})
     return await db.pabili_requests.find_one({"id": pabili_id}, {"_id": 0})
 
-# ==================== DRIVER ROUTES ====================
+# ==================== ADMIN / OPS CENTER ====================
 
-@api_router.post("/driver/profile", response_model=DriverProfile)
-async def create_driver_profile(data: DriverProfileCreate, user = Depends(get_current_user)):
-    """Create driver profile"""
-    if user["role"] != "driver":
-        raise HTTPException(status_code=403, detail="Only drivers can create driver profiles")
+@api_router.get("/admin/analytics")
+async def get_analytics(user = Depends(get_current_user)):
+    """Get platform analytics"""
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
     
-    existing = await db.driver_profiles.find_one({"user_id": user["id"]}, {"_id": 0})
-    if existing:
-        raise HTTPException(status_code=400, detail="Driver profile already exists")
+    total_users = await db.users.count_documents({})
+    total_restaurants = await db.restaurants.count_documents({})
+    total_orders = await db.orders.count_documents({})
+    total_riders = await db.rider_profiles.count_documents({})
+    online_riders = await db.rider_profiles.count_documents({"is_online": True})
+    busy_riders = await db.rider_profiles.count_documents({"is_on_delivery": True})
     
-    profile = DriverProfile(user_id=user["id"], **data.model_dump())
-    doc = profile.model_dump()
-    doc["created_at"] = doc["created_at"].isoformat()
-    await db.driver_profiles.insert_one(doc)
-    return profile
-
-@api_router.get("/driver/profile")
-async def get_driver_profile(user = Depends(get_current_user)):
-    """Get driver profile"""
-    profile = await db.driver_profiles.find_one({"user_id": user["id"]}, {"_id": 0})
-    if not profile:
-        raise HTTPException(status_code=404, detail="Driver profile not found")
-    return profile
-
-@api_router.put("/driver/availability")
-async def toggle_driver_availability(is_available: bool, user = Depends(get_current_user)):
-    """Toggle driver availability"""
-    if user["role"] != "driver":
-        raise HTTPException(status_code=403, detail="Only drivers can update availability")
+    orders_pending = await db.orders.count_documents({"order_status": "pending"})
+    orders_preparing = await db.orders.count_documents({"order_status": {"$in": ["confirmed", "preparing"]}})
+    orders_ready = await db.orders.count_documents({"order_status": "ready"})
+    orders_in_transit = await db.orders.count_documents({"order_status": "picked_up"})
+    orders_delivered = await db.orders.count_documents({"order_status": "delivered"})
     
-    await db.driver_profiles.update_one(
-        {"user_id": user["id"]},
-        {"$set": {"is_available": is_available}}
-    )
-    return {"is_available": is_available}
-
-@api_router.get("/driver/earnings")
-async def get_driver_earnings(user = Depends(get_current_user)):
-    """Get driver earnings summary"""
-    if user["role"] != "driver":
-        raise HTTPException(status_code=403, detail="Only drivers can view earnings")
-    
-    # Get completed orders
-    orders = await db.orders.find(
-        {"driver_id": user["id"], "order_status": "delivered"},
-        {"_id": 0}
-    ).to_list(1000)
-    
-    # Get completed pabili requests
-    pabili = await db.pabili_requests.find(
-        {"driver_id": user["id"], "status": "completed"},
-        {"_id": 0}
-    ).to_list(1000)
-    
-    total_deliveries = len(orders) + len(pabili)
-    order_earnings = sum(o.get("delivery_fee", 0) for o in orders)
-    pabili_earnings = sum(p.get("service_fee", 0) for p in pabili)
-    total_earnings = order_earnings + pabili_earnings
+    # Revenue
+    delivered_orders = await db.orders.find({"order_status": "delivered"}, {"_id": 0, "total": 1}).to_list(10000)
+    total_revenue = sum(o.get("total", 0) for o in delivered_orders)
     
     return {
-        "total_deliveries": total_deliveries,
-        "order_deliveries": len(orders),
-        "pabili_deliveries": len(pabili),
-        "order_earnings": order_earnings,
-        "pabili_earnings": pabili_earnings,
-        "total_earnings": total_earnings
+        "total_users": total_users,
+        "total_restaurants": total_restaurants,
+        "total_orders": total_orders,
+        "total_riders": total_riders,
+        "online_riders": online_riders,
+        "busy_riders": busy_riders,
+        "available_riders": online_riders - busy_riders,
+        "orders_pending": orders_pending,
+        "orders_preparing": orders_preparing,
+        "orders_ready": orders_ready,
+        "orders_in_transit": orders_in_transit,
+        "orders_delivered": orders_delivered,
+        "total_revenue": total_revenue
     }
-
-# ==================== ADMIN ROUTES ====================
 
 @api_router.get("/admin/users")
 async def get_all_users(user = Depends(get_current_user)):
-    """Get all users (admin only)"""
+    """Get all users"""
     if user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
     users = await db.users.find({}, {"_id": 0}).to_list(1000)
@@ -848,7 +959,7 @@ async def get_all_users(user = Depends(get_current_user)):
 
 @api_router.get("/admin/restaurants")
 async def get_all_restaurants(user = Depends(get_current_user)):
-    """Get all restaurants including unapproved (admin only)"""
+    """Get all restaurants"""
     if user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
     restaurants = await db.restaurants.find({}, {"_id": 0}).to_list(1000)
@@ -856,78 +967,47 @@ async def get_all_restaurants(user = Depends(get_current_user)):
 
 @api_router.put("/admin/restaurants/{restaurant_id}/approve")
 async def approve_restaurant(restaurant_id: str, is_approved: bool, user = Depends(get_current_user)):
-    """Approve/reject restaurant (admin only)"""
+    """Approve/reject restaurant"""
     if user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
-    
     await db.restaurants.update_one({"id": restaurant_id}, {"$set": {"is_approved": is_approved}})
     return await db.restaurants.find_one({"id": restaurant_id}, {"_id": 0})
 
-@api_router.get("/admin/analytics")
-async def get_analytics(user = Depends(get_current_user)):
-    """Get platform analytics (admin only)"""
+@api_router.get("/admin/live-orders")
+async def get_live_orders(user = Depends(get_current_user)):
+    """Get all active orders for War Room"""
     if user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
     
-    total_users = await db.users.count_documents({})
-    total_restaurants = await db.restaurants.count_documents({})
-    total_orders = await db.orders.count_documents({})
-    total_pabili = await db.pabili_requests.count_documents({})
+    active_statuses = ["pending", "confirmed", "preparing", "ready", "picked_up"]
+    orders = await db.orders.find(
+        {"order_status": {"$in": active_statuses}},
+        {"_id": 0}
+    ).sort("created_at", -1).to_list(200)
     
-    # Orders by status
-    orders_pending = await db.orders.count_documents({"order_status": "pending"})
-    orders_delivered = await db.orders.count_documents({"order_status": "delivered"})
-    
-    # Revenue
-    orders = await db.orders.find({"order_status": "delivered"}, {"_id": 0, "total": 1}).to_list(10000)
-    total_revenue = sum(o.get("total", 0) for o in orders)
-    
-    return {
-        "total_users": total_users,
-        "total_restaurants": total_restaurants,
-        "total_orders": total_orders,
-        "total_pabili": total_pabili,
-        "orders_pending": orders_pending,
-        "orders_delivered": orders_delivered,
-        "total_revenue": total_revenue
-    }
+    return orders
 
 # ==================== PROMO CODES ====================
 
 @api_router.post("/promo-codes", status_code=201)
 async def create_promo_code(data: PromoCodeCreate, user = Depends(get_current_user)):
-    """Create a new promo code (admin only)"""
+    """Create promo code (admin only)"""
     if user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
     
-    # Check if code already exists
     existing = await db.promo_codes.find_one({"code": data.code.upper()}, {"_id": 0})
     if existing:
-        raise HTTPException(status_code=400, detail="Promo code already exists")
+        raise HTTPException(status_code=400, detail="Code already exists")
     
-    promo = PromoCode(
-        code=data.code.upper(),
-        description=data.description,
-        discount_type=data.discount_type,
-        discount_value=data.discount_value,
-        min_order=data.min_order,
-        max_discount=data.max_discount,
-        usage_limit=data.usage_limit,
-        per_user_limit=data.per_user_limit,
-        valid_until=datetime.fromisoformat(data.valid_until) if data.valid_until else None,
-        applicable_areas=data.applicable_areas,
-        first_order_only=data.first_order_only
-    )
-    
+    promo = PromoCode(code=data.code.upper(), **{k: v for k, v in data.model_dump().items() if k != 'code'})
     doc = promo.model_dump()
     doc["created_at"] = doc["created_at"].isoformat()
     doc["valid_from"] = doc["valid_from"].isoformat()
-    if doc["valid_until"]:
-        doc["valid_until"] = doc["valid_until"].isoformat()
+    if doc.get("valid_until"):
+        doc["valid_until"] = doc["valid_until"].isoformat() if isinstance(doc["valid_until"], datetime) else doc["valid_until"]
     
     await db.promo_codes.insert_one(doc)
     doc.pop("_id", None)
-    
     return doc
 
 @api_router.get("/promo-codes")
@@ -935,624 +1015,208 @@ async def get_promo_codes(user = Depends(get_current_user)):
     """Get all promo codes (admin only)"""
     if user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
-    
-    promos = await db.promo_codes.find({}, {"_id": 0}).to_list(100)
-    return promos
+    return await db.promo_codes.find({}, {"_id": 0}).to_list(100)
 
 @api_router.get("/promo-codes/active")
-async def get_active_promo_codes():
-    """Get active promo codes for display"""
-    now = datetime.now(timezone.utc).isoformat()
-    promos = await db.promo_codes.find({
-        "is_active": True,
-        "valid_from": {"$lte": now},
-        "$or": [
-            {"valid_until": None},
-            {"valid_until": {"$gte": now}}
-        ]
-    }, {"_id": 0}).to_list(20)
-    
-    # Filter out codes that have reached usage limit
-    active_promos = []
-    for p in promos:
-        if p.get("usage_limit") is None or p.get("usage_count", 0) < p["usage_limit"]:
-            # Return limited info for public display
-            active_promos.append({
-                "code": p["code"],
-                "description": p["description"],
-                "discount_type": p["discount_type"],
-                "discount_value": p["discount_value"],
-                "min_order": p.get("min_order", 0),
-                "first_order_only": p.get("first_order_only", False)
-            })
-    
-    return active_promos
+async def get_active_promos():
+    """Get active promos for customers"""
+    promos = await db.promo_codes.find({"is_active": True}, {"_id": 0}).to_list(20)
+    return [{"code": p["code"], "description": p["description"], "discount_type": p["discount_type"], 
+             "discount_value": p["discount_value"], "min_order": p.get("min_order", 0),
+             "first_order_only": p.get("first_order_only", False)} for p in promos]
 
 @api_router.post("/promo-codes/validate")
-async def validate_promo_code(data: PromoCodeApply, user = Depends(get_current_user)):
-    """Validate and calculate discount for a promo code"""
-    code = data.code.upper()
-    
-    promo = await db.promo_codes.find_one({"code": code}, {"_id": 0})
+async def validate_promo(data: PromoCodeApply, user = Depends(get_current_user)):
+    """Validate promo code"""
+    promo = await db.promo_codes.find_one({"code": data.code.upper(), "is_active": True}, {"_id": 0})
     if not promo:
         raise HTTPException(status_code=404, detail="Promo code not found")
     
-    # Check if active
-    if not promo.get("is_active", False):
-        raise HTTPException(status_code=400, detail="This promo code is no longer active")
-    
-    # Check validity period
-    now = datetime.now(timezone.utc)
-    valid_from = datetime.fromisoformat(promo["valid_from"].replace("Z", "+00:00")) if isinstance(promo["valid_from"], str) else promo["valid_from"]
-    if now < valid_from:
-        raise HTTPException(status_code=400, detail="This promo code is not yet valid")
-    
-    if promo.get("valid_until"):
-        valid_until = datetime.fromisoformat(promo["valid_until"].replace("Z", "+00:00")) if isinstance(promo["valid_until"], str) else promo["valid_until"]
-        if now > valid_until:
-            raise HTTPException(status_code=400, detail="This promo code has expired")
-    
-    # Check usage limit
-    if promo.get("usage_limit") and promo.get("usage_count", 0) >= promo["usage_limit"]:
-        raise HTTPException(status_code=400, detail="This promo code has reached its usage limit")
-    
-    # Check per-user limit
-    user_usage = await db.promo_usage.count_documents({
-        "promo_id": promo["id"],
-        "user_id": user["id"]
-    })
-    if user_usage >= promo.get("per_user_limit", 1):
-        raise HTTPException(status_code=400, detail="You have already used this promo code")
-    
-    # Check first order only
-    if promo.get("first_order_only", False):
-        user_orders = await db.orders.count_documents({"customer_id": user["id"]})
-        if user_orders > 0:
-            raise HTTPException(status_code=400, detail="This promo code is for first orders only")
-    
-    # Check minimum order
     if data.subtotal < promo.get("min_order", 0):
-        raise HTTPException(
-            status_code=400, 
-            detail=f"Minimum order of ₱{promo['min_order']} required for this promo"
-        )
+        raise HTTPException(status_code=400, detail=f"Minimum order ₱{promo['min_order']} required")
     
-    # Check applicable areas
-    if promo.get("applicable_areas") and data.area:
-        if data.area not in promo["applicable_areas"]:
-            raise HTTPException(status_code=400, detail="This promo code is not valid for your area")
-    
-    # Calculate discount
     discount = 0.0
-    discount_type = promo["discount_type"]
-    discount_value = promo["discount_value"]
-    
-    if discount_type == "free_delivery":
+    if promo["discount_type"] == "free_delivery":
         discount = data.delivery_fee
-    elif discount_type == "percentage":
-        discount = data.subtotal * (discount_value / 100)
+    elif promo["discount_type"] == "percentage":
+        discount = data.subtotal * (promo["discount_value"] / 100)
         if promo.get("max_discount"):
             discount = min(discount, promo["max_discount"])
-    elif discount_type == "fixed":
-        discount = min(discount_value, data.subtotal + data.delivery_fee)
+    elif promo["discount_type"] == "fixed":
+        discount = min(promo["discount_value"], data.subtotal + data.delivery_fee)
     
     return {
         "valid": True,
-        "code": code,
+        "code": promo["code"],
         "description": promo["description"],
-        "discount_type": discount_type,
-        "discount_value": discount_value,
+        "discount_type": promo["discount_type"],
+        "discount_value": promo["discount_value"],
         "discount_amount": round(discount, 2),
         "new_total": round(data.subtotal + data.delivery_fee - discount, 2)
     }
 
 @api_router.put("/promo-codes/{promo_id}")
-async def update_promo_code(promo_id: str, updates: dict, user = Depends(get_current_user)):
-    """Update a promo code (admin only)"""
+async def update_promo(promo_id: str, updates: dict, user = Depends(get_current_user)):
+    """Update promo code"""
     if user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
     
-    promo = await db.promo_codes.find_one({"id": promo_id}, {"_id": 0})
-    if not promo:
-        raise HTTPException(status_code=404, detail="Promo code not found")
-    
-    allowed_fields = ["description", "is_active", "usage_limit", "valid_until", "min_order", "max_discount"]
-    update_data = {k: v for k, v in updates.items() if k in allowed_fields}
-    
+    allowed = ["description", "is_active", "usage_limit", "valid_until", "min_order", "max_discount"]
+    update_data = {k: v for k, v in updates.items() if k in allowed}
     if update_data:
         await db.promo_codes.update_one({"id": promo_id}, {"$set": update_data})
-    
     return await db.promo_codes.find_one({"id": promo_id}, {"_id": 0})
 
 @api_router.delete("/promo-codes/{promo_id}")
-async def delete_promo_code(promo_id: str, user = Depends(get_current_user)):
-    """Delete a promo code (admin only)"""
+async def delete_promo(promo_id: str, user = Depends(get_current_user)):
+    """Delete promo code"""
     if user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
-    
-    result = await db.promo_codes.delete_one({"id": promo_id})
-    if result.deleted_count == 0:
-        raise HTTPException(status_code=404, detail="Promo code not found")
-    
-    return {"message": "Promo code deleted"}
+    await db.promo_codes.delete_one({"id": promo_id})
+    return {"message": "Deleted"}
 
-# ==================== COVERAGE AREAS ====================
-
-@api_router.get("/coverage-areas")
-async def get_coverage_areas():
-    """Get delivery coverage areas - Urdaneta City and perimeter towns"""
-    return {
-        "service_area": "Urdaneta City & Surrounding Areas",
-        "center": {
-            "lat": 15.9761,
-            "lng": 120.5711,
-            "name": "Urdaneta City Center"
-        },
-        "areas": [
-            {
-                "id": "urdaneta",
-                "name": "Urdaneta City",
-                "name_tl": "Lungsod ng Urdaneta",
-                "type": "city",
-                "is_primary": True,
-                "lat": 15.9761,
-                "lng": 120.5711,
-                "delivery_fee": 30.0,
-                "estimated_time": "20-35 mins",
-                "barangays": [
-                    "Poblacion", "Nancayasan", "San Vicente", "Cabuloan", "Cabaruan",
-                    "Camantiles", "Casantaan", "Consolacion", "Dilan Paurido", "Dr. Pedro T. Orata",
-                    "Labit Proper", "Labit West", "Mabanogbog", "Macalong", "Nancalobasaan",
-                    "Parayao", "Pinmaludpod", "San Jose", "Santa Lucia", "Santo Domingo",
-                    "Sugcong", "Tiparo", "Tulong"
-                ]
-            },
-            {
-                "id": "binalonan",
-                "name": "Binalonan",
-                "name_tl": "Binalonan",
-                "type": "municipality",
-                "is_primary": False,
-                "lat": 16.0525,
-                "lng": 120.5969,
-                "delivery_fee": 45.0,
-                "estimated_time": "30-45 mins",
-                "barangays": ["Poblacion", "Balangobong", "San Felipe", "San Juan"]
-            },
-            {
-                "id": "asingan",
-                "name": "Asingan",
-                "name_tl": "Asingan",
-                "type": "municipality",
-                "is_primary": False,
-                "lat": 16.0042,
-                "lng": 120.6683,
-                "delivery_fee": 50.0,
-                "estimated_time": "35-50 mins",
-                "barangays": ["Poblacion", "Ariston East", "Ariston West", "Bantog"]
-            },
-            {
-                "id": "villasis",
-                "name": "Villasis",
-                "name_tl": "Villasis",
-                "type": "municipality",
-                "is_primary": False,
-                "lat": 15.9083,
-                "lng": 120.5878,
-                "delivery_fee": 45.0,
-                "estimated_time": "30-45 mins",
-                "barangays": ["Poblacion", "Bacag", "Barangobong", "Puelay"]
-            },
-            {
-                "id": "manaoag",
-                "name": "Manaoag",
-                "name_tl": "Manaoag",
-                "type": "municipality",
-                "is_primary": False,
-                "lat": 16.0439,
-                "lng": 120.4861,
-                "delivery_fee": 50.0,
-                "estimated_time": "35-50 mins",
-                "barangays": ["Poblacion", "Babasit", "Baguinay", "Licsi"]
-            },
-            {
-                "id": "san_manuel",
-                "name": "San Manuel",
-                "name_tl": "San Manuel",
-                "type": "municipality",
-                "is_primary": False,
-                "lat": 15.9883,
-                "lng": 120.6644,
-                "delivery_fee": 45.0,
-                "estimated_time": "30-45 mins",
-                "barangays": ["Poblacion", "San Antonio", "San Juan", "San Roque"]
-            },
-            {
-                "id": "sison",
-                "name": "Sison",
-                "name_tl": "Sison",
-                "type": "municipality",
-                "is_primary": False,
-                "lat": 16.1742,
-                "lng": 120.5117,
-                "delivery_fee": 60.0,
-                "estimated_time": "40-55 mins",
-                "barangays": ["Poblacion", "Amagbagan", "Artacho", "Asan Norte"]
-            },
-            {
-                "id": "pozorrubio",
-                "name": "Pozorrubio",
-                "name_tl": "Pozorrubio",
-                "type": "municipality",
-                "is_primary": False,
-                "lat": 16.1094,
-                "lng": 120.5489,
-                "delivery_fee": 55.0,
-                "estimated_time": "35-50 mins",
-                "barangays": ["Poblacion", "Alipangpang", "Amagbagan", "Balacag"]
-            }
-        ],
-        "polygon": [
-            {"lat": 16.20, "lng": 120.40},
-            {"lat": 16.20, "lng": 120.75},
-            {"lat": 15.85, "lng": 120.75},
-            {"lat": 15.85, "lng": 120.40}
-        ]
-    }
-
-@api_router.post("/check-delivery")
-async def check_delivery_availability(lat: float, lng: float):
-    """Check if a location is within delivery coverage"""
-    # Simple bounding box check for Urdaneta area
-    min_lat, max_lat = 15.85, 16.20
-    min_lng, max_lng = 120.40, 120.75
-    
-    if min_lat <= lat <= max_lat and min_lng <= lng <= max_lng:
-        # Calculate approximate distance from Urdaneta center
-        center_lat, center_lng = 15.9761, 120.5711
-        # Rough distance calculation
-        lat_diff = abs(lat - center_lat)
-        lng_diff = abs(lng - center_lng)
-        
-        if lat_diff < 0.05 and lng_diff < 0.05:
-            return {"available": True, "zone": "urdaneta", "delivery_fee": 30.0, "estimated_time": "20-35 mins"}
-        elif lat_diff < 0.10 and lng_diff < 0.10:
-            return {"available": True, "zone": "nearby", "delivery_fee": 45.0, "estimated_time": "30-45 mins"}
-        else:
-            return {"available": True, "zone": "perimeter", "delivery_fee": 55.0, "estimated_time": "40-55 mins"}
-    
-    return {"available": False, "message": "Sorry, we don't deliver to this location yet."}
-
-# ==================== CUISINE CATEGORIES ====================
+# ==================== CATEGORIES ====================
 
 @api_router.get("/categories")
 async def get_categories():
     """Get food categories"""
     return [
-        {"id": "filipino", "name": "Filipino", "name_tl": "Pagkaing Pinoy", "icon": "utensils"},
-        {"id": "rice_meals", "name": "Rice Meals", "name_tl": "Mga Ulam", "icon": "bowl-rice"},
-        {"id": "street_food", "name": "Street Food", "name_tl": "Tusok-tusok", "icon": "flame"},
-        {"id": "chicken", "name": "Chicken", "name_tl": "Manok", "icon": "drumstick-bite"},
-        {"id": "pork", "name": "Pork", "name_tl": "Baboy", "icon": "bacon"},
-        {"id": "seafood", "name": "Seafood", "name_tl": "Seafood", "icon": "fish"},
-        {"id": "noodles", "name": "Noodles", "name_tl": "Pancit", "icon": "bowl-food"},
-        {"id": "desserts", "name": "Desserts", "name_tl": "Panghimagas", "icon": "ice-cream"},
-        {"id": "drinks", "name": "Drinks", "name_tl": "Inumin", "icon": "cup-soda"},
-        {"id": "snacks", "name": "Snacks", "name_tl": "Meryenda", "icon": "cookie"}
+        {"id": "filipino", "name": "Filipino", "name_tl": "Pagkaing Pinoy"},
+        {"id": "rice_meals", "name": "Rice Meals", "name_tl": "Mga Ulam"},
+        {"id": "street_food", "name": "Street Food", "name_tl": "Tusok-tusok"},
+        {"id": "chicken", "name": "Chicken", "name_tl": "Manok"},
+        {"id": "seafood", "name": "Seafood", "name_tl": "Seafood"},
+        {"id": "noodles", "name": "Noodles", "name_tl": "Pancit"},
+        {"id": "desserts", "name": "Desserts", "name_tl": "Panghimagas"},
+        {"id": "drinks", "name": "Drinks", "name_tl": "Inumin"},
     ]
+
+# ==================== COVERAGE AREAS ====================
+
+@api_router.get("/coverage-areas")
+async def get_coverage_areas():
+    """Get delivery coverage areas"""
+    return {
+        "center": {"lat": 15.9761, "lng": 120.5711, "name": "Urdaneta City Center"},
+        "areas": [
+            {"id": "urdaneta", "name": "Urdaneta City", "delivery_fee": 30.0, "is_primary": True},
+            {"id": "binalonan", "name": "Binalonan", "delivery_fee": 45.0},
+            {"id": "villasis", "name": "Villasis", "delivery_fee": 45.0},
+            {"id": "manaoag", "name": "Manaoag", "delivery_fee": 50.0},
+            {"id": "asingan", "name": "Asingan", "delivery_fee": 50.0},
+            {"id": "pozorrubio", "name": "Pozorrubio", "delivery_fee": 55.0},
+            {"id": "sison", "name": "Sison", "delivery_fee": 60.0},
+        ]
+    }
 
 # ==================== SEED DATA ====================
 
 @api_router.post("/seed")
 async def seed_data():
-    """Seed sample data for testing"""
-    # Check if already seeded
+    """Seed sample data"""
     existing = await db.restaurants.find_one({})
     if existing:
         return {"message": "Data already seeded"}
     
-    # Create sample restaurants with locations
-    restaurants_data = [
-        {
-            "id": str(uuid.uuid4()),
-            "owner_id": "system",
-            "name": "Mang Tomas Ihaw-Ihaw",
-            "description": "Authentic Filipino grilled dishes. Best isaw and BBQ in Urdaneta!",
-            "cuisine_type": "street_food",
-            "address": "McArthur Highway, Urdaneta City",
-            "area": "Urdaneta City",
-            "lat": 15.9785,
-            "lng": 120.5723,
-            "phone": "09171234567",
-            "image_url": "https://images.unsplash.com/photo-1555939594-58d7cb561ad1?w=800",
-            "is_open": True,
-            "is_approved": True,
-            "rating": 4.5,
-            "total_reviews": 128,
-            "delivery_fee": 30.0,
-            "min_order": 100.0,
-            "estimated_delivery_time": "25-35 mins",
-            "created_at": datetime.now(timezone.utc).isoformat()
-        },
-        {
-            "id": str(uuid.uuid4()),
-            "owner_id": "system",
-            "name": "Aling Nena's Carinderia",
-            "description": "Home-cooked Filipino meals just like lola used to make. Sinigang, Adobo, Kare-kare and more!",
-            "cuisine_type": "filipino",
-            "address": "Rizal St., Poblacion, Urdaneta City",
-            "area": "Urdaneta City",
-            "lat": 15.9761,
-            "lng": 120.5711,
-            "phone": "09181234567",
-            "image_url": "https://images.unsplash.com/photo-1504674900247-0877df9cc836?w=800",
-            "is_open": True,
-            "is_approved": True,
-            "rating": 4.8,
-            "total_reviews": 256,
-            "delivery_fee": 35.0,
-            "min_order": 150.0,
-            "estimated_delivery_time": "30-40 mins",
-            "created_at": datetime.now(timezone.utc).isoformat()
-        },
-        {
-            "id": str(uuid.uuid4()),
-            "owner_id": "system",
-            "name": "Chicken Haus Urdaneta",
-            "description": "Crispy fried chicken, wings, and chicken meals. Unli rice available!",
-            "cuisine_type": "chicken",
-            "address": "Nancayasan, Urdaneta City",
-            "area": "Urdaneta City",
-            "lat": 15.9812,
-            "lng": 120.5689,
-            "phone": "09191234567",
-            "image_url": "https://images.unsplash.com/photo-1626645738196-c2a7c87a8f58?w=800",
-            "is_open": True,
-            "is_approved": True,
-            "rating": 4.3,
-            "total_reviews": 89,
-            "delivery_fee": 25.0,
-            "min_order": 120.0,
-            "estimated_delivery_time": "20-30 mins",
-            "created_at": datetime.now(timezone.utc).isoformat()
-        },
-        {
-            "id": str(uuid.uuid4()),
-            "owner_id": "system",
-            "name": "Panciteria de Urdaneta",
-            "description": "Pancit Canton, Bihon, Palabok, Malabon. Perfect for parties and everyday meals!",
-            "cuisine_type": "noodles",
-            "address": "San Vicente, Urdaneta City",
-            "area": "Urdaneta City",
-            "lat": 15.9733,
-            "lng": 120.5756,
-            "phone": "09201234567",
-            "image_url": "https://images.unsplash.com/photo-1569718212165-3a8278d5f624?w=800",
-            "is_open": True,
-            "is_approved": True,
-            "rating": 4.6,
-            "total_reviews": 167,
-            "delivery_fee": 30.0,
-            "min_order": 100.0,
-            "estimated_delivery_time": "25-35 mins",
-            "created_at": datetime.now(timezone.utc).isoformat()
-        },
-        {
-            "id": str(uuid.uuid4()),
-            "owner_id": "system",
-            "name": "Kuya Eddie's Sisig",
-            "description": "The best sizzling sisig in Pangasinan! Pork, Chicken, Bangus, Tofu sisig available.",
-            "cuisine_type": "filipino",
-            "address": "Binalonan Road, Binalonan",
-            "area": "Binalonan",
-            "lat": 16.0525,
-            "lng": 120.5969,
-            "phone": "09211234567",
-            "image_url": "https://images.unsplash.com/photo-1599321329467-7be3840f23a3?w=800",
-            "is_open": True,
-            "is_approved": True,
-            "rating": 4.7,
-            "total_reviews": 203,
-            "delivery_fee": 45.0,
-            "min_order": 150.0,
-            "estimated_delivery_time": "35-45 mins",
-            "created_at": datetime.now(timezone.utc).isoformat()
-        },
-        {
-            "id": str(uuid.uuid4()),
-            "owner_id": "system",
-            "name": "Manaoag Longganisa House",
-            "description": "Famous Vigan-style longganisa and tapsilog meals. Breakfast all day!",
-            "cuisine_type": "filipino",
-            "address": "Main Road, Manaoag",
-            "area": "Manaoag",
-            "lat": 16.0439,
-            "lng": 120.4861,
-            "phone": "09221234567",
-            "image_url": "https://images.unsplash.com/photo-1528735602780-2552fd46c7af?w=800",
-            "is_open": True,
-            "is_approved": True,
-            "rating": 4.4,
-            "total_reviews": 145,
-            "delivery_fee": 50.0,
-            "min_order": 120.0,
-            "estimated_delivery_time": "40-50 mins",
-            "created_at": datetime.now(timezone.utc).isoformat()
-        }
+    restaurants = [
+        {"id": str(uuid.uuid4()), "owner_id": "system", "name": "Mang Tomas Ihaw-Ihaw", 
+         "description": "Best BBQ and isaw in Urdaneta!", "cuisine_type": "street_food",
+         "address": "McArthur Highway, Urdaneta City", "area": "Urdaneta City",
+         "lat": 15.9785, "lng": 120.5723, "phone": "09171234567",
+         "image_url": "https://images.unsplash.com/photo-1555939594-58d7cb561ad1?w=800",
+         "is_open": True, "is_approved": True, "rating": 4.5, "total_reviews": 128,
+         "delivery_fee": 30.0, "min_order": 100.0, "estimated_delivery_time": "25-35 mins",
+         "created_at": datetime.now(timezone.utc).isoformat()},
+        {"id": str(uuid.uuid4()), "owner_id": "system", "name": "Aling Nena's Carinderia",
+         "description": "Home-cooked Filipino meals - Sinigang, Adobo, Kare-kare!", "cuisine_type": "filipino",
+         "address": "Rizal St., Poblacion, Urdaneta City", "area": "Urdaneta City",
+         "lat": 15.9761, "lng": 120.5711, "phone": "09181234567",
+         "image_url": "https://images.unsplash.com/photo-1504674900247-0877df9cc836?w=800",
+         "is_open": True, "is_approved": True, "rating": 4.8, "total_reviews": 256,
+         "delivery_fee": 35.0, "min_order": 150.0, "estimated_delivery_time": "30-40 mins",
+         "created_at": datetime.now(timezone.utc).isoformat()},
+        {"id": str(uuid.uuid4()), "owner_id": "system", "name": "Chicken Haus Urdaneta",
+         "description": "Crispy fried chicken with unli rice!", "cuisine_type": "chicken",
+         "address": "Nancayasan, Urdaneta City", "area": "Urdaneta City",
+         "lat": 15.9812, "lng": 120.5689, "phone": "09191234567",
+         "image_url": "https://images.unsplash.com/photo-1626645738196-c2a7c87a8f58?w=800",
+         "is_open": True, "is_approved": True, "rating": 4.3, "total_reviews": 89,
+         "delivery_fee": 25.0, "min_order": 120.0, "estimated_delivery_time": "20-30 mins",
+         "created_at": datetime.now(timezone.utc).isoformat()},
     ]
     
-    await db.restaurants.insert_many(restaurants_data)
+    await db.restaurants.insert_many(restaurants)
     
-    # Create menu items for each restaurant
-    menu_items_data = []
+    # Add menu items
+    menu_items = []
+    for r in restaurants[:1]:  # Add menu to first restaurant
+        menu_items.extend([
+            {"id": str(uuid.uuid4()), "restaurant_id": r["id"], "name": "Pork BBQ (3 sticks)",
+             "description": "Grilled pork skewers", "price": 60.0, "category": "Grilled", "is_available": True,
+             "created_at": datetime.now(timezone.utc).isoformat()},
+            {"id": str(uuid.uuid4()), "restaurant_id": r["id"], "name": "Chicken Isaw (5 sticks)",
+             "description": "Grilled chicken intestines", "price": 50.0, "category": "Grilled", "is_available": True,
+             "created_at": datetime.now(timezone.utc).isoformat()},
+            {"id": str(uuid.uuid4()), "restaurant_id": r["id"], "name": "BBQ Platter",
+             "description": "Assorted grilled items with rice", "price": 150.0, "category": "Meals", "is_available": True,
+             "created_at": datetime.now(timezone.utc).isoformat()},
+        ])
     
-    # Mang Tomas menu
-    mang_tomas_id = restaurants_data[0]["id"]
-    menu_items_data.extend([
-        {"id": str(uuid.uuid4()), "restaurant_id": mang_tomas_id, "name": "Pork BBQ (3 sticks)", "description": "Grilled pork skewers with special sauce", "price": 60.0, "category": "Grilled", "is_available": True, "created_at": datetime.now(timezone.utc).isoformat()},
-        {"id": str(uuid.uuid4()), "restaurant_id": mang_tomas_id, "name": "Chicken Isaw (5 sticks)", "description": "Grilled chicken intestines", "price": 50.0, "category": "Grilled", "is_available": True, "created_at": datetime.now(timezone.utc).isoformat()},
-        {"id": str(uuid.uuid4()), "restaurant_id": mang_tomas_id, "name": "Pork Isaw (5 sticks)", "description": "Grilled pork intestines", "price": 55.0, "category": "Grilled", "is_available": True, "created_at": datetime.now(timezone.utc).isoformat()},
-        {"id": str(uuid.uuid4()), "restaurant_id": mang_tomas_id, "name": "Betamax (5 pcs)", "description": "Grilled coagulated pork blood", "price": 45.0, "category": "Grilled", "is_available": True, "created_at": datetime.now(timezone.utc).isoformat()},
-        {"id": str(uuid.uuid4()), "restaurant_id": mang_tomas_id, "name": "BBQ Platter", "description": "Assorted grilled items with rice", "price": 150.0, "category": "Meals", "is_available": True, "created_at": datetime.now(timezone.utc).isoformat()},
-    ])
+    if menu_items:
+        await db.menu_items.insert_many(menu_items)
     
-    # Aling Nena menu
-    aling_nena_id = restaurants_data[1]["id"]
-    menu_items_data.extend([
-        {"id": str(uuid.uuid4()), "restaurant_id": aling_nena_id, "name": "Sinigang na Baboy", "description": "Pork in sour tamarind soup", "price": 120.0, "category": "Soups", "is_available": True, "created_at": datetime.now(timezone.utc).isoformat()},
-        {"id": str(uuid.uuid4()), "restaurant_id": aling_nena_id, "name": "Chicken Adobo", "description": "Braised chicken in soy sauce and vinegar", "price": 95.0, "category": "Main", "is_available": True, "created_at": datetime.now(timezone.utc).isoformat()},
-        {"id": str(uuid.uuid4()), "restaurant_id": aling_nena_id, "name": "Kare-Kare", "description": "Oxtail stew in peanut sauce", "price": 180.0, "category": "Main", "is_available": True, "created_at": datetime.now(timezone.utc).isoformat()},
-        {"id": str(uuid.uuid4()), "restaurant_id": aling_nena_id, "name": "Pinakbet", "description": "Mixed vegetables with shrimp paste", "price": 85.0, "category": "Vegetables", "is_available": True, "created_at": datetime.now(timezone.utc).isoformat()},
-        {"id": str(uuid.uuid4()), "restaurant_id": aling_nena_id, "name": "Plain Rice", "description": "Steamed white rice", "price": 15.0, "category": "Sides", "is_available": True, "created_at": datetime.now(timezone.utc).isoformat()},
-    ])
-    
-    # Chicken Haus menu
-    chicken_id = restaurants_data[2]["id"]
-    menu_items_data.extend([
-        {"id": str(uuid.uuid4()), "restaurant_id": chicken_id, "name": "1pc Chicken with Rice", "description": "Crispy fried chicken with unlimited rice", "price": 99.0, "category": "Meals", "is_available": True, "created_at": datetime.now(timezone.utc).isoformat()},
-        {"id": str(uuid.uuid4()), "restaurant_id": chicken_id, "name": "2pc Chicken with Rice", "description": "Two pieces of crispy fried chicken", "price": 159.0, "category": "Meals", "is_available": True, "created_at": datetime.now(timezone.utc).isoformat()},
-        {"id": str(uuid.uuid4()), "restaurant_id": chicken_id, "name": "Buffalo Wings (6pcs)", "description": "Spicy buffalo-style wings", "price": 129.0, "category": "Wings", "is_available": True, "created_at": datetime.now(timezone.utc).isoformat()},
-        {"id": str(uuid.uuid4()), "restaurant_id": chicken_id, "name": "Chicken Burger", "description": "Crispy chicken patty burger", "price": 89.0, "category": "Burgers", "is_available": True, "created_at": datetime.now(timezone.utc).isoformat()},
-    ])
-    
-    # Panciteria menu
-    pancit_id = restaurants_data[3]["id"]
-    menu_items_data.extend([
-        {"id": str(uuid.uuid4()), "restaurant_id": pancit_id, "name": "Pancit Canton", "description": "Stir-fried egg noodles with vegetables", "price": 75.0, "category": "Noodles", "is_available": True, "created_at": datetime.now(timezone.utc).isoformat()},
-        {"id": str(uuid.uuid4()), "restaurant_id": pancit_id, "name": "Pancit Bihon", "description": "Rice noodles with vegetables and meat", "price": 70.0, "category": "Noodles", "is_available": True, "created_at": datetime.now(timezone.utc).isoformat()},
-        {"id": str(uuid.uuid4()), "restaurant_id": pancit_id, "name": "Palabok", "description": "Rice noodles in shrimp sauce", "price": 85.0, "category": "Noodles", "is_available": True, "created_at": datetime.now(timezone.utc).isoformat()},
-        {"id": str(uuid.uuid4()), "restaurant_id": pancit_id, "name": "Pancit Malabon", "description": "Thick rice noodles with seafood", "price": 95.0, "category": "Noodles", "is_available": True, "created_at": datetime.now(timezone.utc).isoformat()},
-        {"id": str(uuid.uuid4()), "restaurant_id": pancit_id, "name": "Party Tray (10pax)", "description": "Large tray of mixed pancit", "price": 450.0, "category": "Party", "is_available": True, "created_at": datetime.now(timezone.utc).isoformat()},
-    ])
-    
-    await db.menu_items.insert_many(menu_items_data)
-    
-    return {"message": "Sample data seeded successfully", "restaurants": len(restaurants_data), "menu_items": len(menu_items_data)}
-
-@api_router.post("/seed-promos")
-async def seed_promo_codes():
-    """Seed sample promo codes for testing"""
-    existing = await db.promo_codes.find_one({})
-    if existing:
-        return {"message": "Promo codes already seeded"}
-    
-    now = datetime.now(timezone.utc)
-    next_month = now + timedelta(days=30)
-    
-    promo_codes = [
-        {
-            "id": str(uuid.uuid4()),
-            "code": "WELCOME50",
-            "description": "50% off your first order! Maximum ₱100 discount.",
-            "discount_type": "percentage",
-            "discount_value": 50.0,
-            "min_order": 200.0,
-            "max_discount": 100.0,
-            "usage_limit": 1000,
-            "usage_count": 0,
-            "per_user_limit": 1,
-            "valid_from": now.isoformat(),
-            "valid_until": next_month.isoformat(),
-            "is_active": True,
-            "first_order_only": True,
-            "applicable_areas": None,
-            "created_at": now.isoformat()
-        },
-        {
-            "id": str(uuid.uuid4()),
-            "code": "FREEDEL",
-            "description": "Free delivery on orders ₱300+",
-            "discount_type": "free_delivery",
-            "discount_value": 0,
-            "min_order": 300.0,
-            "max_discount": None,
-            "usage_limit": 500,
-            "usage_count": 0,
-            "per_user_limit": 3,
-            "valid_from": now.isoformat(),
-            "valid_until": next_month.isoformat(),
-            "is_active": True,
-            "first_order_only": False,
-            "applicable_areas": None,
-            "created_at": now.isoformat()
-        },
-        {
-            "id": str(uuid.uuid4()),
-            "code": "URDANETA20",
-            "description": "₱20 off for Urdaneta City orders",
-            "discount_type": "fixed",
-            "discount_value": 20.0,
-            "min_order": 150.0,
-            "max_discount": None,
-            "usage_limit": None,
-            "usage_count": 0,
-            "per_user_limit": 5,
-            "valid_from": now.isoformat(),
-            "valid_until": next_month.isoformat(),
-            "is_active": True,
-            "first_order_only": False,
-            "applicable_areas": ["Urdaneta City"],
-            "created_at": now.isoformat()
-        },
-        {
-            "id": str(uuid.uuid4()),
-            "code": "PABILI10",
-            "description": "₱10 off Pabili service fee",
-            "discount_type": "fixed",
-            "discount_value": 10.0,
-            "min_order": 0,
-            "max_discount": None,
-            "usage_limit": 200,
-            "usage_count": 0,
-            "per_user_limit": 2,
-            "valid_from": now.isoformat(),
-            "valid_until": next_month.isoformat(),
-            "is_active": True,
-            "first_order_only": False,
-            "applicable_areas": None,
-            "created_at": now.isoformat()
-        },
-        {
-            "id": str(uuid.uuid4()),
-            "code": "MERYENDA",
-            "description": "15% off afternoon orders (2-5 PM)",
-            "discount_type": "percentage",
-            "discount_value": 15.0,
-            "min_order": 100.0,
-            "max_discount": 50.0,
-            "usage_limit": 300,
-            "usage_count": 0,
-            "per_user_limit": 3,
-            "valid_from": now.isoformat(),
-            "valid_until": next_month.isoformat(),
-            "is_active": True,
-            "first_order_only": False,
-            "applicable_areas": None,
-            "created_at": now.isoformat()
-        }
+    # Add promo codes
+    promos = [
+        {"id": str(uuid.uuid4()), "code": "WELCOME50", "description": "50% off first order (max ₱100)",
+         "discount_type": "percentage", "discount_value": 50.0, "min_order": 200.0, "max_discount": 100.0,
+         "is_active": True, "first_order_only": True, "usage_count": 0,
+         "valid_from": datetime.now(timezone.utc).isoformat(),
+         "created_at": datetime.now(timezone.utc).isoformat()},
+        {"id": str(uuid.uuid4()), "code": "FREEDEL", "description": "Free delivery on ₱300+ orders",
+         "discount_type": "free_delivery", "discount_value": 0, "min_order": 300.0,
+         "is_active": True, "first_order_only": False, "usage_count": 0,
+         "valid_from": datetime.now(timezone.utc).isoformat(),
+         "created_at": datetime.now(timezone.utc).isoformat()},
     ]
+    await db.promo_codes.insert_many(promos)
     
-    await db.promo_codes.insert_many(promo_codes)
+    # Add sample riders
+    riders = [
+        {"id": str(uuid.uuid4()), "user_id": "rider_sample_1", "vehicle_type": "motorcycle",
+         "plate_number": "ABC 1234", "is_online": True, "is_on_delivery": False,
+         "current_lat": 15.9780, "current_lng": 120.5700, "total_deliveries": 45, "total_earnings": 2250.0,
+         "rating": 4.8, "created_at": datetime.now(timezone.utc).isoformat()},
+        {"id": str(uuid.uuid4()), "user_id": "rider_sample_2", "vehicle_type": "tricycle",
+         "plate_number": "XYZ 5678", "is_online": True, "is_on_delivery": True,
+         "current_lat": 15.9750, "current_lng": 120.5730, "total_deliveries": 32, "total_earnings": 1600.0,
+         "rating": 4.5, "created_at": datetime.now(timezone.utc).isoformat()},
+        {"id": str(uuid.uuid4()), "user_id": "rider_sample_3", "vehicle_type": "motorcycle",
+         "plate_number": "DEF 9012", "is_online": False, "is_on_delivery": False,
+         "current_lat": 15.9800, "current_lng": 120.5680, "total_deliveries": 78, "total_earnings": 3900.0,
+         "rating": 4.9, "created_at": datetime.now(timezone.utc).isoformat()},
+    ]
+    await db.rider_profiles.insert_many(riders)
     
-    return {"message": "Promo codes seeded successfully", "count": len(promo_codes)}
+    return {"message": "Data seeded", "restaurants": len(restaurants), "promos": len(promos), "riders": len(riders)}
 
 # ==================== HEALTH CHECK ====================
 
 @api_router.get("/")
 async def root():
-    return {"message": "KainTayo API - Urdaneta City Food Delivery", "version": "1.0.0"}
+    return {"message": "KainTayo - The Sync Dashboard API", "version": "2.0.0"}
 
 @api_router.get("/health")
 async def health_check():
-    return {"status": "healthy", "service": "KainTayo API"}
+    return {"status": "healthy"}
 
-# Include the router in the main app
+# Include router
 app.include_router(api_router)
 
+# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
-    allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
+    allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
