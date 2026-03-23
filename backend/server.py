@@ -430,6 +430,12 @@ async def get_my_restaurant(user = Depends(get_current_user)):
     """Get restaurant owned by current user"""
     if user["role"] not in ["restaurant_owner", "admin"]:
         raise HTTPException(status_code=403, detail="Not a restaurant owner")
+    
+    # Simulation Bypass: If it's the demo merchant, give them a mock store
+    if user["id"] == "sim-user-restaurant_owner":
+        restaurant = await db.restaurants.find_one({"owner_id": "system"}, {"_id": 0})
+        return restaurant
+        
     restaurant = await db.restaurants.find_one({"owner_id": user["id"]}, {"_id": 0})
     return restaurant
 
