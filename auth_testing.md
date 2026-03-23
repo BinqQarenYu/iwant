@@ -1,73 +1,48 @@
-# Auth-Gated App Testing Playbook
+# Auth-Gated App Testing Playbook for KainTayo
 
-## Step 1: Create Test User & Session
+## Test User Credentials
+- Session Token: `test_session_sync_1774272612407`
+- User ID: `test-user-sync`
+- Email: `test@kayntayo.com`
+- Current Role: `customer`
 
+## Step 1: Test Backend APIs
 ```bash
-mongosh --eval "
-use('test_database');
-var userId = 'test-user-' + Date.now();
-var sessionToken = 'test_session_' + Date.now();
-db.users.insertOne({
-  user_id: userId,
-  email: 'test.user.' + Date.now() + '@example.com',
-  name: 'Test User',
-  picture: 'https://via.placeholder.com/150',
-  role: 'customer',
-  created_at: new Date()
-});
-db.user_sessions.insertOne({
-  user_id: userId,
-  session_token: sessionToken,
-  expires_at: new Date(Date.now() + 7*24*60*60*1000),
-  created_at: new Date()
-});
-print('Session token: ' + sessionToken);
-print('User ID: ' + userId);
-"
+API_URL=https://pabili-connect.preview.emergentagent.com
+TOKEN=test_session_sync_1774272612407
+
+# Test auth/me
+curl -X GET "$API_URL/api/auth/me" -H "Authorization: Bearer $TOKEN"
+
+# Test switch role 
+curl -X PUT "$API_URL/api/auth/switch-role" -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{"role":"admin"}'
+
+# Test admin analytics (after switching to admin)
+curl -X GET "$API_URL/api/admin/analytics" -H "Authorization: Bearer $TOKEN"
 ```
 
-## Step 2: Test Backend API
-
-```bash
-# Test auth endpoint
-curl -X GET "https://your-app.com/api/auth/me" \
-  -H "Authorization: Bearer YOUR_SESSION_TOKEN"
-
-# Test protected endpoints
-curl -X GET "https://your-app.com/api/orders" \
-  -H "Authorization: Bearer YOUR_SESSION_TOKEN"
-```
-
-## Step 3: Browser Testing
-
+## Step 2: Browser Testing with Cookie Auth
 ```javascript
-// Set cookie and navigate
 await page.context.add_cookies([{
     "name": "session_token",
-    "value": "YOUR_SESSION_TOKEN",
-    "domain": "your-app.com",
+    "value": "test_session_sync_1774272612407",
+    "domain": "pabili-connect.preview.emergentagent.com",
     "path": "/",
     "httpOnly": true,
     "secure": true,
     "sameSite": "None"
 }]);
-await page.goto("https://your-app.com");
+// Also set localStorage:
+await page.evaluate(`localStorage.setItem('kayntayo_session', 'test_session_sync_1774272612407')`);
+await page.goto("https://pabili-connect.preview.emergentagent.com/dashboard");
 ```
 
-## Quick Debug
-
-```bash
-# Check data format
-mongosh --eval "
-use('test_database');
-db.users.find().limit(2).pretty();
-db.user_sessions.find().limit(2).pretty();
-"
-```
-
-## Checklist
-- [ ] User document has user_id field
-- [ ] Session user_id matches user's user_id exactly
-- [ ] All queries use `{"_id": 0}` projection
-- [ ] API returns user data (not 401/404)
-- [ ] Dashboard loads without redirect
+## Step 3: Checklist
+- [ ] /api/auth/me returns user data with session token
+- [ ] /api/auth/switch-role switches between customer/rider/merchant/admin
+- [ ] Google Auth login page shows "Continue with Google" button
+- [ ] Dashboard loads with role-based content
+- [ ] Role switcher dropdown works
+- [ ] Admin Ops Center shows analytics
+- [ ] Rider view shows online/offline toggle
+- [ ] Customer view shows restaurants

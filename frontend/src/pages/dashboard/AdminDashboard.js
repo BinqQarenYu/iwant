@@ -140,8 +140,8 @@ export default function AdminDashboard() {
 
   const roleColors = {
     customer: 'bg-blue-100 text-blue-700',
-    restaurant_owner: 'bg-orange-100 text-orange-700',
-    driver: 'bg-green-100 text-green-700',
+    merchant: 'bg-orange-100 text-orange-700',
+    rider: 'bg-green-100 text-green-700',
     admin: 'bg-purple-100 text-purple-700'
   };
 
@@ -284,13 +284,13 @@ export default function AdminDashboard() {
                   <div className="flex justify-between">
                     <span>Restaurants</span>
                     <span className="font-medium">
-                      {users.filter(u => u.role === 'restaurant_owner').length}
+                      {users.filter(u => u.role === 'merchant').length}
                     </span>
                   </div>
                   <div className="flex justify-between">
-                    <span>Drivers</span>
+                    <span>Riders</span>
                     <span className="font-medium">
-                      {users.filter(u => u.role === 'driver').length}
+                      {users.filter(u => u.role === 'rider').length}
                     </span>
                   </div>
                 </div>

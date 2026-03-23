@@ -1,6 +1,6 @@
 import React from "react";
 import "@/App.css";
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { AppProvider, useApp } from "./contexts/AppContext";
 import { Toaster } from "./components/ui/sonner";
 
@@ -14,11 +14,13 @@ import OrderDetailPage from "./pages/OrderDetailPage";
 import PabiliPage from "./pages/PabiliPage";
 import ProfilePage from "./pages/ProfilePage";
 import AuthPage from "./pages/AuthPage";
+import AuthCallback from "./pages/AuthCallback";
 
 // Dashboard Pages
 import RestaurantDashboard from "./pages/dashboard/RestaurantDashboard";
 import DriverDashboard from "./pages/dashboard/DriverDashboard";
 import AdminDashboard from "./pages/dashboard/AdminDashboard";
+import SyncDashboard from "./pages/dashboard/SyncDashboard";
 
 // Protected Route Component
 const ProtectedRoute = ({ children, allowedRoles = [] }) => {
@@ -59,19 +61,19 @@ const RoleBasedRedirect = () => {
     return <HomePage />;
   }
 
-  switch (user.role) {
-    case 'restaurant_owner':
-      return <Navigate to="/dashboard/restaurant" replace />;
-    case 'driver':
-      return <Navigate to="/dashboard/driver" replace />;
-    case 'admin':
-      return <Navigate to="/dashboard/admin" replace />;
-    default:
-      return <HomePage />;
-  }
+  // All authenticated users go to The Sync Dashboard
+  return <Navigate to="/dashboard" replace />;
 };
 
-function AppRoutes() {
+function AppRouter() {
+  const location = useLocation();
+
+  // CRITICAL: Check for session_id in URL hash synchronously during render
+  // This prevents race conditions with ProtectedRoute auth checks
+  if (location.hash?.includes('session_id=')) {
+    return <AuthCallback />;
+  }
+
   return (
     <Routes>
       {/* Public Routes */}
@@ -79,7 +81,7 @@ function AppRoutes() {
       <Route path="/auth" element={<AuthPage />} />
       <Route path="/home" element={<HomePage />} />
       <Route path="/restaurant/:id" element={<RestaurantPage />} />
-      
+
       {/* Customer Routes */}
       <Route path="/cart" element={
         <ProtectedRoute allowedRoles={['customer']}>
@@ -113,13 +115,18 @@ function AppRoutes() {
       } />
 
       {/* Dashboard Routes */}
+      <Route path="/dashboard" element={
+        <ProtectedRoute>
+          <SyncDashboard />
+        </ProtectedRoute>
+      } />
       <Route path="/dashboard/restaurant" element={
-        <ProtectedRoute allowedRoles={['restaurant_owner']}>
+        <ProtectedRoute allowedRoles={['merchant']}>
           <RestaurantDashboard />
         </ProtectedRoute>
       } />
       <Route path="/dashboard/driver" element={
-        <ProtectedRoute allowedRoles={['driver']}>
+        <ProtectedRoute allowedRoles={['rider']}>
           <DriverDashboard />
         </ProtectedRoute>
       } />
@@ -140,7 +147,7 @@ function App() {
     <div className="App">
       <AppProvider>
         <BrowserRouter>
-          <AppRoutes />
+          <AppRouter />
         </BrowserRouter>
         <Toaster position="top-center" richColors />
       </AppProvider>

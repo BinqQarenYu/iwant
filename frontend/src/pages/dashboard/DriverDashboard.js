@@ -30,10 +30,10 @@ export default function DriverDashboard() {
   const loadData = async () => {
     try {
       const [profileRes, ordersRes, pabiliRes, earningsRes] = await Promise.all([
-        axios.get(`${API}/driver/profile`).catch(() => ({ data: null })),
+        axios.get(`${API}/rider/profile`).catch(() => ({ data: null })),
         axios.get(`${API}/orders`),
         axios.get(`${API}/pabili`),
-        axios.get(`${API}/driver/earnings`)
+        axios.get(`${API}/rider/earnings`)
       ]);
       
       setDriverProfile(profileRes.data);
@@ -62,8 +62,8 @@ export default function DriverDashboard() {
 
   const toggleAvailability = async (isAvailable) => {
     try {
-      await axios.put(`${API}/driver/availability?is_available=${isAvailable}`);
-      setDriverProfile(prev => ({ ...prev, is_available: isAvailable }));
+      await axios.put(`${API}/rider/online?is_online=${isAvailable}`);
+      setDriverProfile(prev => ({ ...prev, is_online: isAvailable }));
       toast.success(isAvailable ? 'You are now online' : 'You are now offline');
     } catch (error) {
       toast.error('Failed to update availability');
@@ -72,7 +72,7 @@ export default function DriverDashboard() {
 
   const acceptOrder = async (orderId) => {
     try {
-      await axios.put(`${API}/orders/${orderId}/assign-driver`);
+      await axios.put(`${API}/orders/${orderId}/assign-rider`);
       loadDeliveries();
       toast.success('Order accepted!');
     } catch (error) {
@@ -110,10 +110,10 @@ export default function DriverDashboard() {
     }
   };
 
-  const availableOrders = orders.filter(o => o.order_status === 'ready' && !o.driver_id);
-  const myOrders = orders.filter(o => o.driver_id === user?.id && !['delivered', 'cancelled'].includes(o.order_status));
-  const availablePabili = pabiliRequests.filter(p => p.status === 'pending' && !p.driver_id);
-  const myPabili = pabiliRequests.filter(p => p.driver_id === user?.id && !['completed', 'cancelled'].includes(p.status));
+  const availableOrders = orders.filter(o => o.order_status === 'ready' && !o.rider_id);
+  const myOrders = orders.filter(o => o.rider_id === user?.user_id && !['delivered', 'cancelled'].includes(o.order_status));
+  const availablePabili = pabiliRequests.filter(p => p.status === 'pending' && !p.rider_id);
+  const myPabili = pabiliRequests.filter(p => p.rider_id === user?.user_id && !['completed', 'cancelled'].includes(p.status));
 
   if (loading) {
     return (
@@ -137,12 +137,12 @@ export default function DriverDashboard() {
           <div className="flex items-center justify-between">
             <div>
               <p className="font-medium text-sm">Availability</p>
-              <p className={`text-xs ${driverProfile?.is_available ? 'text-green-600' : 'text-muted-foreground'}`}>
-                {driverProfile?.is_available ? 'Online' : 'Offline'}
+              <p className={`text-xs ${driverProfile?.is_online ? 'text-green-600' : 'text-muted-foreground'}`}>
+                {driverProfile?.is_online ? 'Online' : 'Offline'}
               </p>
             </div>
             <Switch
-              checked={driverProfile?.is_available || false}
+              checked={driverProfile?.is_online || false}
               onCheckedChange={toggleAvailability}
               data-testid="availability-toggle"
             />
@@ -310,7 +310,7 @@ export default function DriverDashboard() {
                       <Button
                         className="w-full btn-primary"
                         onClick={() => acceptOrder(order.id)}
-                        disabled={!driverProfile?.is_available}
+                        disabled={!driverProfile?.is_online}
                         data-testid={`accept-${order.id}`}
                       >
                         Accept Delivery
@@ -430,7 +430,7 @@ export default function DriverDashboard() {
                       <Button
                         className="w-full btn-pabili"
                         onClick={() => acceptPabili(request.id)}
-                        disabled={!driverProfile?.is_available}
+                        disabled={!driverProfile?.is_online}
                         data-testid={`accept-pabili-${request.id}`}
                       >
                         Accept Pabili

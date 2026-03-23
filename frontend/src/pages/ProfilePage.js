@@ -53,8 +53,8 @@ export default function ProfilePage() {
 
   const roleLabels = {
     customer: 'Customer',
-    restaurant_owner: 'Restaurant Owner',
-    driver: 'Delivery Driver',
+    merchant: 'Restaurant Owner',
+    rider: 'Delivery Rider',
     admin: 'Administrator'
   };
 
@@ -76,8 +76,12 @@ export default function ProfilePage() {
         {/* Profile Card */}
         <div className="bg-white rounded-2xl p-5 border border-border">
           <div className="flex items-center gap-4 mb-4">
-            <div className="w-16 h-16 rounded-full bg-[#FF6B00]/10 flex items-center justify-center">
-              <User className="w-8 h-8 text-[#FF6B00]" />
+            <div className="w-16 h-16 rounded-full bg-[#FF6B00]/10 flex items-center justify-center overflow-hidden">
+              {user?.picture ? (
+                <img src={user.picture} alt={user?.name} className="w-full h-full object-cover" />
+              ) : (
+                <User className="w-8 h-8 text-[#FF6B00]" />
+              )}
             </div>
             <div className="flex-1">
               {editing ? (
@@ -94,12 +98,12 @@ export default function ProfilePage() {
             </div>
           </div>
 
-          {/* Phone */}
+          {/* Email */}
           <div className="flex items-center gap-3 py-3 border-t border-border">
             <Phone className="w-5 h-5 text-muted-foreground" />
             <div className="flex-1">
-              <p className="text-sm text-muted-foreground">{t('phoneNumber')}</p>
-              <p className="font-medium">{user?.phone}</p>
+              <p className="text-sm text-muted-foreground">Email</p>
+              <p className="font-medium">{user?.email}</p>
             </div>
           </div>
 
@@ -185,7 +189,7 @@ export default function ProfilePage() {
           {user?.role !== 'customer' && (
             <button
               className="w-full flex items-center justify-between p-4 hover:bg-gray-50 transition-colors border-t border-border"
-              onClick={() => navigate(`/dashboard/${user?.role === 'restaurant_owner' ? 'restaurant' : user?.role}`)}
+              onClick={() => navigate(`/dashboard/${user?.role === 'merchant' ? 'restaurant' : user?.role}`)}
               data-testid="dashboard-link"
             >
               <span>Go to Dashboard</span>

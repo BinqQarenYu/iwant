@@ -15,7 +15,7 @@ export const useApp = () => {
 
 export const AppProvider = ({ children }) => {
   const [user, setUser] = useState(null);
-  const [token, setToken] = useState(localStorage.getItem('kayntayo_token'));
+  const [sessionToken, setSessionToken] = useState(localStorage.getItem('kayntayo_session'));
   const [cart, setCart] = useState([]);
   const [cartRestaurant, setCartRestaurant] = useState(null);
   const [language, setLanguage] = useState(localStorage.getItem('kayntayo_lang') || 'en');
@@ -56,10 +56,6 @@ export const AppProvider = ({ children }) => {
       delivered: 'Delivered',
       login: 'Login',
       register: 'Register',
-      phoneNumber: 'Phone Number',
-      enterOtp: 'Enter OTP',
-      verifyOtp: 'Verify OTP',
-      sendOtp: 'Send OTP',
       name: 'Name',
       pabiliService: 'Pabili Service',
       pabiliDesc: 'Need groceries? Let our riders shop for you!',
@@ -111,10 +107,6 @@ export const AppProvider = ({ children }) => {
       delivered: 'Na-deliver',
       login: 'Mag-login',
       register: 'Mag-register',
-      phoneNumber: 'Numero ng Telepono',
-      enterOtp: 'Ilagay ang OTP',
-      verifyOtp: 'I-verify ang OTP',
-      sendOtp: 'Magpadala ng OTP',
       name: 'Pangalan',
       pabiliService: 'Serbisyong Pabili',
       pabiliDesc: 'Kailangan ng grocery? Hayaan ang aming rider mamili para sayo!',
@@ -139,43 +131,46 @@ export const AppProvider = ({ children }) => {
     return translations[language]?.[key] || translations.en[key] || key;
   }, [language]);
 
-  // Set up axios interceptor
+  // Set up axios interceptor for session token
   useEffect(() => {
-    if (token) {
-      axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+    if (sessionToken) {
+      axios.defaults.headers.common['Authorization'] = `Bearer ${sessionToken}`;
     } else {
       delete axios.defaults.headers.common['Authorization'];
     }
-  }, [token]);
+  }, [sessionToken]);
 
-  // Load user on mount
+  // Load user on mount - check session
   useEffect(() => {
-    const loadUser = async () => {
-      if (token) {
+    // CRITICAL: If returning from OAuth callback, skip the /me check.
+    // AuthCallback will exchange the session_id and establish the session first.
+    if (window.location.hash?.includes('session_id=')) {
+      setLoading(false);
+      return;
+    }
+
+    const checkAuth = async () => {
+      if (sessionToken) {
         try {
           const response = await axios.get(`${API}/auth/me`);
           setUser(response.data);
         } catch (error) {
-          console.error('Failed to load user:', error);
-          localStorage.removeItem('kayntayo_token');
-          setToken(null);
+          console.error('Session invalid:', error);
+          localStorage.removeItem('kayntayo_session');
+          setSessionToken(null);
         }
       }
       setLoading(false);
     };
-    loadUser();
-  }, [token]);
+    checkAuth();
+  }, [sessionToken]);
 
   // Load cart from localStorage
   useEffect(() => {
     const savedCart = localStorage.getItem('kayntayo_cart');
     const savedRestaurant = localStorage.getItem('kayntayo_cart_restaurant');
-    if (savedCart) {
-      setCart(JSON.parse(savedCart));
-    }
-    if (savedRestaurant) {
-      setCartRestaurant(JSON.parse(savedRestaurant));
-    }
+    if (savedCart) setCart(JSON.parse(savedCart));
+    if (savedRestaurant) setCartRestaurant(JSON.parse(savedRestaurant));
   }, []);
 
   // Save cart to localStorage
@@ -186,34 +181,36 @@ export const AppProvider = ({ children }) => {
     }
   }, [cart, cartRestaurant]);
 
-  const login = async (phone, otp, name = null, role = 'customer') => {
-    const response = await axios.post(`${API}/auth/verify-otp`, {
-      phone,
-      otp,
-      name,
-      role
-    });
-    const { token: newToken, user: userData } = response.data;
-    localStorage.setItem('kayntayo_token', newToken);
-    setToken(newToken);
+  // Exchange Google Auth session_id for session_token
+  const exchangeSession = useCallback(async (sessionId) => {
+    const response = await axios.post(`${API}/auth/session`, { session_id: sessionId });
+    const { user: userData, session_token } = response.data;
+    localStorage.setItem('kayntayo_session', session_token);
+    setSessionToken(session_token);
     setUser(userData);
-    return response.data;
-  };
+    return userData;
+  }, []);
 
-  const logout = () => {
-    localStorage.removeItem('kayntayo_token');
-    setToken(null);
+  // Switch role (for Sync Dashboard)
+  const switchRole = useCallback(async (role) => {
+    const response = await axios.put(`${API}/auth/switch-role`, { role });
+    setUser(response.data);
+    return response.data;
+  }, []);
+
+  const logout = useCallback(async () => {
+    try {
+      await axios.post(`${API}/auth/logout`);
+    } catch (e) {
+      // Ignore logout errors
+    }
+    localStorage.removeItem('kayntayo_session');
+    setSessionToken(null);
     setUser(null);
     clearCart();
-  };
-
-  const sendOtp = async (phone) => {
-    const response = await axios.post(`${API}/auth/send-otp`, { phone });
-    return response.data;
-  };
+  }, []);
 
   const addToCart = (item, restaurant, quantity = 1, specialInstructions = '') => {
-    // If adding from different restaurant, clear cart
     if (cartRestaurant && cartRestaurant.id !== restaurant.id) {
       setCart([]);
     }
@@ -280,15 +277,15 @@ export const AppProvider = ({ children }) => {
   const value = {
     user,
     setUser,
-    token,
+    sessionToken,
     cart,
     cartRestaurant,
     language,
     loading,
     t,
-    login,
+    exchangeSession,
+    switchRole,
     logout,
-    sendOtp,
     addToCart,
     updateCartItemQuantity,
     removeFromCart,

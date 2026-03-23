@@ -1,25 +1,15 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useApp } from '../contexts/AppContext';
-import { Phone, ArrowLeft, Loader2 } from 'lucide-react';
+import { ArrowLeft, Loader2 } from 'lucide-react';
 import { Button } from '../components/ui/button';
-import { Input } from '../components/ui/input';
-import { Label } from '../components/ui/label';
-import { InputOTP, InputOTPGroup, InputOTPSlot } from '../components/ui/input-otp';
-import { toast } from 'sonner';
+
+// REMINDER: DO NOT HARDCODE THE URL, OR ADD ANY FALLBACKS OR REDIRECT URLS, THIS BREAKS THE AUTH
 
 export default function AuthPage() {
-  const { t, sendOtp, login, user } = useApp();
+  const { user, loading } = useApp();
   const navigate = useNavigate();
   const location = useLocation();
-  
-  const [step, setStep] = useState('phone'); // phone, otp, register
-  const [phone, setPhone] = useState('');
-  const [otp, setOtp] = useState('');
-  const [name, setName] = useState('');
-  const [role, setRole] = useState('customer');
-  const [loading, setLoading] = useState(false);
-  const [debugOtp, setDebugOtp] = useState('');
 
   // Redirect if already logged in
   React.useEffect(() => {
@@ -29,86 +19,25 @@ export default function AuthPage() {
     }
   }, [user, navigate, location]);
 
-  const handleSendOtp = async (e) => {
-    e.preventDefault();
-    if (!phone || phone.length < 10) {
-      toast.error('Please enter a valid phone number');
-      return;
-    }
-
-    setLoading(true);
-    try {
-      const formattedPhone = phone.startsWith('+63') ? phone : `+63${phone.replace(/^0/, '')}`;
-      const result = await sendOtp(formattedPhone);
-      setPhone(formattedPhone);
-      setDebugOtp(result.debug_otp); // For testing - remove in production
-      setStep('otp');
-      toast.success('OTP sent successfully!');
-    } catch (error) {
-      toast.error(error.response?.data?.detail || 'Failed to send OTP');
-    } finally {
-      setLoading(false);
-    }
+  const handleGoogleLogin = () => {
+    const redirectUrl = window.location.origin + '/';
+    window.location.href = `https://auth.emergentagent.com/?redirect=${encodeURIComponent(redirectUrl)}`;
   };
 
-  const handleVerifyOtp = async (e) => {
-    e.preventDefault();
-    if (otp.length !== 6) {
-      toast.error('Please enter the 6-digit OTP');
-      return;
-    }
-
-    setLoading(true);
-    try {
-      const result = await login(phone, otp, name || null, role);
-      if (result.is_new && !name) {
-        setStep('register');
-        setLoading(false);
-        return;
-      }
-      toast.success('Welcome to KainTayo!');
-      const from = location.state?.from?.pathname || '/';
-      navigate(from, { replace: true });
-    } catch (error) {
-      if (error.response?.data?.detail?.includes('Name is required')) {
-        setStep('register');
-      } else {
-        toast.error(error.response?.data?.detail || 'Invalid OTP');
-      }
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleRegister = async (e) => {
-    e.preventDefault();
-    if (!name.trim()) {
-      toast.error('Please enter your name');
-      return;
-    }
-
-    setLoading(true);
-    try {
-      await login(phone, otp, name, role);
-      toast.success('Welcome to KainTayo!');
-      const from = location.state?.from?.pathname || '/';
-      navigate(from, { replace: true });
-    } catch (error) {
-      toast.error(error.response?.data?.detail || 'Registration failed');
-      // Reset to OTP step to get new OTP
-      setStep('phone');
-      setOtp('');
-    } finally {
-      setLoading(false);
-    }
-  };
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background">
+        <div className="animate-spin w-8 h-8 border-4 border-[#FF6B00] border-t-transparent rounded-full" />
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-background flex flex-col">
       {/* Header */}
       <header className="p-4">
-        <button 
-          onClick={() => step === 'phone' ? navigate('/') : setStep('phone')}
+        <button
+          onClick={() => navigate('/')}
           className="p-2 -ml-2 hover:bg-gray-100 rounded-full transition-colors"
           data-testid="back-button"
         >
@@ -116,161 +45,53 @@ export default function AuthPage() {
         </button>
       </header>
 
-      <main className="flex-1 px-6 py-8">
+      <main className="flex-1 px-6 py-8 flex flex-col items-center justify-center">
         {/* Logo/Brand */}
-        <div className="text-center mb-8">
-          <h1 className="text-3xl font-extrabold text-[#FF6B00] mb-2">KainTayo</h1>
-          <p className="text-muted-foreground">Urdaneta City Food Delivery</p>
+        <div className="text-center mb-10">
+          <h1 className="text-4xl font-extrabold text-[#FF6B00] mb-2" data-testid="auth-title">KainTayo</h1>
+          <p className="text-muted-foreground text-sm">Urdaneta City Food Delivery</p>
         </div>
 
-        {/* Phone Step */}
-        {step === 'phone' && (
-          <form onSubmit={handleSendOtp} className="space-y-6 animate-fade-in">
-            <div className="space-y-2">
-              <Label htmlFor="phone">{t('phoneNumber')}</Label>
-              <div className="relative">
-                <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
-                <Input
-                  id="phone"
-                  type="tel"
-                  placeholder="09XX XXX XXXX"
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
-                  className="pl-10 h-12 rounded-xl"
-                  data-testid="phone-input"
-                />
-              </div>
-              <p className="text-xs text-muted-foreground">
-                We'll send you a verification code via SMS
-              </p>
-            </div>
+        {/* Welcome Text */}
+        <div className="text-center mb-8 max-w-sm">
+          <h2 className="text-lg font-semibold mb-2">Welcome back!</h2>
+          <p className="text-sm text-muted-foreground">
+            Sign in with your Google account to order food, deliver, or manage your restaurant.
+          </p>
+        </div>
 
-            {/* Role Selection */}
-            <div className="space-y-2">
-              <Label>I want to</Label>
-              <div className="grid grid-cols-2 gap-3">
-                {[
-                  { value: 'customer', label: 'Order Food', icon: '🍜' },
-                  { value: 'restaurant_owner', label: 'Sell Food', icon: '🏪' },
-                  { value: 'driver', label: 'Deliver', icon: '🛵' },
-                  { value: 'admin', label: 'Manage', icon: '⚙️' },
-                ].map((option) => (
-                  <button
-                    key={option.value}
-                    type="button"
-                    className={`p-3 rounded-xl border-2 text-left transition-all ${
-                      role === option.value 
-                        ? 'border-[#FF6B00] bg-[#FF6B00]/5' 
-                        : 'border-border hover:border-[#FF6B00]/50'
-                    }`}
-                    onClick={() => setRole(option.value)}
-                    data-testid={`role-${option.value}`}
-                  >
-                    <span className="text-2xl mb-1 block">{option.icon}</span>
-                    <span className="text-sm font-medium">{option.label}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
+        {/* Google Sign In Button */}
+        <Button
+          onClick={handleGoogleLogin}
+          className="w-full max-w-sm h-12 rounded-xl bg-white hover:bg-gray-50 text-gray-700 border border-gray-300 shadow-sm flex items-center justify-center gap-3 transition-all"
+          data-testid="google-login-btn"
+        >
+          <svg width="20" height="20" viewBox="0 0 24 24">
+            <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 01-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z" fill="#4285F4"/>
+            <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
+            <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
+            <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
+          </svg>
+          <span className="font-medium">Continue with Google</span>
+        </Button>
 
-            <Button 
-              type="submit" 
-              className="w-full h-12 btn-primary"
-              disabled={loading}
-              data-testid="send-otp-btn"
+        {/* Features */}
+        <div className="mt-12 grid grid-cols-2 gap-4 max-w-sm w-full">
+          {[
+            { icon: '🍜', label: 'Order Food' },
+            { icon: '🛵', label: 'Deliver' },
+            { icon: '🏪', label: 'Sell Food' },
+            { icon: '📦', label: 'Pabili Service' },
+          ].map((item) => (
+            <div
+              key={item.label}
+              className="flex items-center gap-2 p-3 rounded-xl bg-muted/50 text-sm"
             >
-              {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : t('sendOtp')}
-            </Button>
-          </form>
-        )}
-
-        {/* OTP Step */}
-        {step === 'otp' && (
-          <form onSubmit={handleVerifyOtp} className="space-y-6 animate-fade-in">
-            <div className="space-y-2 text-center">
-              <Label>{t('enterOtp')}</Label>
-              <p className="text-sm text-muted-foreground">
-                Sent to {phone}
-              </p>
-              {debugOtp && (
-                <p className="text-xs text-[#FF6B00] bg-[#FF6B00]/10 px-3 py-1 rounded-full inline-block">
-                  Debug OTP: {debugOtp}
-                </p>
-              )}
+              <span className="text-xl">{item.icon}</span>
+              <span className="text-muted-foreground font-medium">{item.label}</span>
             </div>
-
-            <div className="flex justify-center">
-              <InputOTP
-                maxLength={6}
-                value={otp}
-                onChange={setOtp}
-                data-testid="otp-input"
-              >
-                <InputOTPGroup>
-                  <InputOTPSlot index={0} />
-                  <InputOTPSlot index={1} />
-                  <InputOTPSlot index={2} />
-                  <InputOTPSlot index={3} />
-                  <InputOTPSlot index={4} />
-                  <InputOTPSlot index={5} />
-                </InputOTPGroup>
-              </InputOTP>
-            </div>
-
-            <Button 
-              type="submit" 
-              className="w-full h-12 btn-primary"
-              disabled={loading || otp.length !== 6}
-              data-testid="verify-otp-btn"
-            >
-              {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : t('verifyOtp')}
-            </Button>
-
-            <button
-              type="button"
-              className="w-full text-center text-sm text-[#FF6B00] hover:underline"
-              onClick={() => {
-                setStep('phone');
-                setOtp('');
-              }}
-              data-testid="change-phone-btn"
-            >
-              Change phone number
-            </button>
-          </form>
-        )}
-
-        {/* Register Step */}
-        {step === 'register' && (
-          <form onSubmit={handleRegister} className="space-y-6 animate-fade-in">
-            <div className="text-center mb-4">
-              <h2 className="text-xl font-bold">Almost there!</h2>
-              <p className="text-sm text-muted-foreground">Tell us your name</p>
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="name">{t('name')}</Label>
-              <Input
-                id="name"
-                type="text"
-                placeholder="Juan dela Cruz"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                className="h-12 rounded-xl"
-                data-testid="name-input"
-              />
-            </div>
-
-            <Button 
-              type="submit" 
-              className="w-full h-12 btn-primary"
-              disabled={loading || !name.trim()}
-              data-testid="register-btn"
-            >
-              {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : 'Complete Registration'}
-            </Button>
-          </form>
-        )}
+          ))}
+        </div>
       </main>
 
       {/* Footer */}
