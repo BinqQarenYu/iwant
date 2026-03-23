@@ -295,12 +295,18 @@ async def get_optional_user(credentials: HTTPAuthorizationCredentials = Depends(
     except:
         return None
 
+# Mock OTP storage for simulation/demo purposes
+LAST_SENT_OTP = {}
+
 # ==================== AUTH ROUTES ====================
 
 @api_router.post("/auth/send-otp")
-async def send_otp(request: OTPRequest):
+async def send_otp_endpoint(request: OTPRequest):
     """Send OTP to phone number (mock - in production use Twilio)"""
     otp = generate_otp()
+    # Save for simulation
+    LAST_SENT_OTP[request.phone] = otp
+    
     otp_store[request.phone] = {
         "otp": otp,
         "expires": datetime.now(timezone.utc) + timedelta(minutes=5)
@@ -1428,6 +1434,95 @@ async def seed_data():
     await db.menu_items.insert_many(menu_items_data)
     
     return {"message": "Sample data seeded successfully", "restaurants": len(restaurants_data), "menu_items": len(menu_items_data)}
+
+# ==================== SIMULATION ROUTES ====================
+
+@api_router.post("/simulate/order")
+async def simulate_order():
+    """Create a random order for demonstration purposes"""
+    # 1. Get a random restaurant
+    restaurants = await db.restaurants.find({"is_open": True}).to_list(100)
+    if not restaurants:
+        return {"error": "No open restaurants found to simulate an order"}
+    
+    import random
+    restaurant = random.choice(restaurants)
+    
+    # 2. Get menu items for this restaurant
+    menu_items = await db.menu_items.find({"restaurant_id": restaurant["id"], "is_available": True}).to_list(100)
+    if not menu_items:
+        return {"error": f"No available menu items for restaurant {restaurant['name']}"}
+    
+    # 3. Select 1-3 random items
+    num_items = random.randint(1, 3)
+    selected_items = random.sample(menu_items, min(num_items, len(menu_items)))
+    
+    order_items = []
+    total = 0
+    for item in selected_items:
+        qty = random.randint(1, 3)
+        order_items.append({
+            "menu_item_id": item["id"],
+            "name": item["name"],
+            "price": item["price"],
+            "quantity": qty
+        })
+        total += item["price"] * qty
+    
+    # 4. Create order doc
+    order_id = str(uuid.uuid4())
+    order_doc = {
+        "id": order_id,
+        "customer_id": "sim-user",
+        "customer_name": "Demo Customer",
+        "restaurant_id": restaurant["id"],
+        "restaurant_name": restaurant["name"],
+        "items": order_items,
+        "total": total + restaurant["delivery_fee"],
+        "delivery_fee": restaurant["delivery_fee"],
+        "delivery_address": "Demo Address, Urdaneta City",
+        "payment_method": "cod",
+        "order_status": "pending",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat()
+    }
+    
+    await db.orders.insert_one(order_doc)
+    order_doc.pop("_id", None)
+    return order_doc
+
+@api_router.post("/simulate/pabili")
+async def simulate_pabili():
+    """Create a random pabili request for demonstration purposes"""
+    import random
+    
+    items = [
+        "2kg Rice, 1L Cooking Oil, 1 doz Eggs",
+        "Medicine from Mercury Drug (Paracetamol, Vit C)",
+        "Milk Tea (2 large pearls, 50% sugar)",
+        "Groceries: Bread, Milk, Coffee, Sugar",
+        "Document delivery to City Hall"
+    ]
+    
+    pabili_id = str(uuid.uuid4())
+    pabili_doc = {
+        "id": pabili_id,
+        "customer_id": "sim-user",
+        "customer_name": "Demo Ghost",
+        "customer_phone": "09170000000",
+        "items_list": random.choice(items),
+        "store_location": "Nearby Supermarket / Botika",
+        "delivery_address": "Demo Drop-off Point, Urdaneta",
+        "estimated_budget": random.randint(200, 1000),
+        "payment_method": "cod",
+        "status": "pending",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat()
+    }
+    
+    await db.pabili_requests.insert_one(pabili_doc)
+    pabili_doc.pop("_id", None)
+    return pabili_doc
 
 @api_router.post("/seed-promos")
 async def seed_promo_codes():

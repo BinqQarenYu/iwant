@@ -31,7 +31,8 @@ export default function RestaurantDashboard() {
 
   useEffect(() => {
     loadData();
-    const interval = setInterval(loadOrders, 15000);
+    // Faster polling for demo purposes (5 seconds)
+    const interval = setInterval(loadOrders, 5000);
     return () => clearInterval(interval);
   }, []);
 
@@ -127,6 +128,21 @@ export default function RestaurantDashboard() {
       </div>
     );
   }
+
+  const simulateOrder = async () => {
+    try {
+      toast.promise(axios.post(`${API}/simulate/order`), {
+        loading: 'Generating demo order...',
+        success: (res) => {
+          loadOrders();
+          return `New order from ${res.data.customer_name}!`;
+        },
+        error: 'Failed to generate order'
+      });
+    } catch (error) {
+      console.error('Simulation failed:', error);
+    }
+  };
 
   if (!restaurant) {
     return (
@@ -231,7 +247,16 @@ export default function RestaurantDashboard() {
         {/* Orders Tab */}
         {activeTab === 'orders' && (
           <div className="space-y-6">
-            <h2 className="text-xl font-bold">Active Orders</h2>
+            <div className="flex items-center justify-between">
+              <h2 className="text-xl font-bold">Inbound Queue</h2>
+              <Button 
+                onClick={simulateOrder}
+                variant="outline"
+                className="border-dashed border-[#FF6B00] text-[#FF6B00] hover:bg-[#FF6B00]/5"
+              >
+                🚀 Generate Demo Order
+              </Button>
+            </div>
             
             {orders.filter(o => !['delivered', 'cancelled'].includes(o.order_status)).length === 0 ? (
               <div className="bg-white rounded-2xl p-8 border border-border text-center">
