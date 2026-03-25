@@ -87,7 +87,7 @@ export default function OrderDetailPage() {
       {/* Header */}
       <header className="app-header px-4 py-3 flex items-center gap-3">
         <button
-          onClick={() => navigate('/orders')}
+          onClick={() => navigate(-1)}
           className="p-2 -ml-2 hover:bg-gray-100 rounded-full"
           data-testid="back-btn"
         >
@@ -147,7 +147,7 @@ export default function OrderDetailPage() {
         )}
 
         {/* Driver Info */}
-        {order.driver_name && (
+        {order.rider_name && (
           <section className="bg-white rounded-2xl p-4 border border-border">
             <h2 className="font-bold mb-3">Your Rider</h2>
             <div className="flex items-center gap-3">
@@ -155,7 +155,7 @@ export default function OrderDetailPage() {
                 <User className="w-6 h-6 text-gray-500" />
               </div>
               <div className="flex-1">
-                <p className="font-semibold">{order.driver_name}</p>
+                <p className="font-semibold">{order.rider_name}</p>
                 <p className="text-sm text-muted-foreground">Your delivery partner</p>
               </div>
               <Button

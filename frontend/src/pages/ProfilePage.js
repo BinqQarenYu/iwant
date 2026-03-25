@@ -12,6 +12,7 @@ import { Textarea } from '../components/ui/textarea';
 import { Label } from '../components/ui/label';
 import { toast } from 'sonner';
 import BottomNav from '../components/BottomNav';
+import LocationPicker from '../components/LocationPicker';
 
 export default function ProfilePage() {
   const navigate = useNavigate();
@@ -113,14 +114,12 @@ export default function ProfilePage() {
             <div className="flex-1">
               <p className="text-sm text-muted-foreground">{t('deliveryAddress')}</p>
               {editing ? (
-                <Textarea
-                  value={address}
-                  onChange={(e) => setAddress(e.target.value)}
-                  placeholder="Enter your default delivery address"
-                  className="resize-none mt-1"
-                  rows={2}
-                  data-testid="address-input"
-                />
+                <div className="mt-2">
+                  <LocationPicker 
+                    initialAddress={address}
+                    onChange={(loc) => setAddress(loc.address)}
+                  />
+                </div>
               ) : (
                 <p className="font-medium">{user?.address || 'Not set'}</p>
               )}

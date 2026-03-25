@@ -8,15 +8,18 @@ import { Input } from '../components/ui/input';
 import { Textarea } from '../components/ui/textarea';
 import { Label } from '../components/ui/label';
 import { toast } from 'sonner';
+import LocationPicker from '../components/LocationPicker';
 
 export default function CheckoutPage() {
   const navigate = useNavigate();
   const { t, language, user, cart, cartRestaurant, getCartTotal, clearCart, API } = useApp();
   
   const [address, setAddress] = useState(user?.address || '');
+  const [addressCoordinates, setAddressCoordinates] = useState({ lat: null, lng: null });
   const [paymentMethod, setPaymentMethod] = useState('cod');
   const [specialInstructions, setSpecialInstructions] = useState('');
   const [loading, setLoading] = useState(false);
+  const [isOrderPlaced, setIsOrderPlaced] = useState(false);
   
   // Promo code state
   const [promoCode, setPromoCode] = useState('');
@@ -42,6 +45,12 @@ export default function CheckoutPage() {
       console.error('Failed to load promos:', error);
     }
   };
+
+  useEffect(() => {
+    if (!isOrderPlaced && (!cartRestaurant || cart.length === 0)) {
+      navigate('/cart', { replace: true });
+    }
+  }, [cartRestaurant, cart.length, navigate, isOrderPlaced]);
 
   const paymentMethods = [
     { id: 'cod', name: t('cod'), icon: Banknote, description: language === 'tl' ? 'Bayad pagdating ng order' : 'Pay when your order arrives' },
@@ -100,6 +109,8 @@ export default function CheckoutPage() {
           special_instructions: item.special_instructions || null
         })),
         delivery_address: address,
+        delivery_lat: addressCoordinates.lat,
+        delivery_lng: addressCoordinates.lng,
         area: cartRestaurant?.area || 'Urdaneta City',
         payment_method: paymentMethod,
         promo_code: appliedPromo?.code || null,
@@ -108,9 +119,10 @@ export default function CheckoutPage() {
 
       const response = await axios.post(`${API}/orders`, orderData);
       
+      setIsOrderPlaced(true);
       clearCart();
       toast.success(t('orderPlaced'));
-      navigate(`/orders/${response.data.id}`);
+      navigate(`/orders/${response.data.id}`, { replace: true });
     } catch (error) {
       console.error('Failed to place order:', error);
       toast.error(error.response?.data?.detail || 'Failed to place order');
@@ -119,8 +131,7 @@ export default function CheckoutPage() {
     }
   };
 
-  if (!cartRestaurant || cart.length === 0) {
-    navigate('/cart');
+  if (!isOrderPlaced && (!cartRestaurant || cart.length === 0)) {
     return null;
   }
 
@@ -141,20 +152,12 @@ export default function CheckoutPage() {
       <main className="px-4 py-4 space-y-5">
         {/* Delivery Address */}
         <section className="space-y-3">
-          <Label className="flex items-center gap-2">
-            <MapPin className="w-4 h-4 text-[#FF6B00]" />
-            {t('deliveryAddress')}
-          </Label>
-          <Textarea
-            placeholder={language === 'tl' 
-              ? "Ilagay ang iyong kumpletong address" 
-              : "Enter your complete delivery address"
-            }
-            value={address}
-            onChange={(e) => setAddress(e.target.value)}
-            className="resize-none rounded-xl"
-            rows={3}
-            data-testid="address-input"
+          <LocationPicker 
+            initialAddress={address} 
+            onChange={(loc) => {
+              setAddress(loc.address);
+              setAddressCoordinates({ lat: loc.lat, lng: loc.lng });
+            }}
           />
         </section>
 

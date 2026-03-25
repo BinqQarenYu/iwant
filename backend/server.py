@@ -1389,7 +1389,7 @@ async def root():
     return {"message": "KainTayo - The Sync Dashboard API", "version": "2.0.0"}
 
 @api_router.post("/simulate/pabili")
-async def simulate_pabili(user = Depends(get_current_user)):
+async def simulate_pabili():
     """Injected ghost pabili request for testing"""
     customer_names = ["Juan Dela Cruz", "Maria Clara", "Jose Rizal", "Andres Bonifacio", "Emilio Aguinaldo"]
     import random
@@ -1409,6 +1409,80 @@ async def simulate_pabili(user = Depends(get_current_user)):
     doc["updated_at"] = doc["updated_at"].isoformat()
     await db.pabili.insert_one(doc)
     return request
+
+@api_router.post("/simulate/order")
+async def simulate_order():
+    """Create a random ghost order for demonstration purposes"""
+    import random
+    import uuid
+    from datetime import datetime, timezone
+    
+    # 1. Get a random restaurant
+    restaurants = await db.restaurants.find({"is_open": True}).to_list(100)
+    if not restaurants:
+        raise HTTPException(status_code=400, detail="No open restaurants found to simulate an order")
+    
+    restaurant = random.choice(restaurants)
+    
+    # 2. Get menu items for this restaurant
+    menu_items = await db.menu_items.find({"restaurant_id": restaurant["id"], "is_available": True}).to_list(100)
+    if not menu_items:
+        raise HTTPException(status_code=400, detail=f"No menu items for {restaurant['name']}")
+    
+    # 3. Select 1-3 random items
+    num_items = random.randint(1, 4)
+    selected_items = random.sample(menu_items, min(num_items, len(menu_items)))
+    
+    order_items = []
+    subtotal = 0.0
+    for item in selected_items:
+        qty = random.randint(1, 3)
+        order_items.append(
+            OrderItem(
+                menu_item_id=item["id"],
+                name=item["name"],
+                price=item["price"],
+                quantity=qty,
+                special_instructions=random.choice([None, "Make it spicy", "Extra sauce", "No peanuts"])
+            )
+        )
+        subtotal += item["price"] * qty
+    
+    # 4. Create OrderDoc
+    delivery_fee = restaurant.get("delivery_fee", 40.0)
+    total = subtotal + delivery_fee
+    
+    customer_names = ["Ghost Shopper Alpha", "Ghost Shopper Beta", "Delta Tester", "Sim User"]
+    customer_name = random.choice(customer_names)
+    
+    order = Order(
+        customer_id=f"ghost_{uuid.uuid4().hex[:8]}",
+        customer_name=customer_name,
+        customer_email="ghost@example.com",
+        customer_phone="09170000000",
+        restaurant_id=restaurant["id"],
+        restaurant_name=restaurant["name"],
+        items=order_items,
+        subtotal=subtotal,
+        delivery_fee=delivery_fee,
+        discount=0.0,
+        promo_code=None,
+        total=total,
+        delivery_address=f"Simulated Address {random.randint(10,99)}, Urdaneta City",
+        delivery_lat=None,
+        delivery_lng=None,
+        area=restaurant.get("area", "Urdaneta City"),
+        payment_method="cod",
+        special_instructions=None,
+        estimated_delivery=restaurant.get("estimated_delivery_time", "30-45 mins")
+    )
+    
+    doc = order.model_dump()
+    doc["created_at"] = doc["created_at"].isoformat()
+    doc["updated_at"] = doc["updated_at"].isoformat()
+    await db.orders.insert_one(doc)
+    
+    return order
 
 @api_router.get("/health")
 async def health_check():

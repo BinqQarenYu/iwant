@@ -12,6 +12,7 @@ import { Textarea } from '../components/ui/textarea';
 import { Label } from '../components/ui/label';
 import { toast } from 'sonner';
 import BottomNav from '../components/BottomNav';
+import LocationPicker from '../components/LocationPicker';
 
 export default function PabiliPage() {
   const navigate = useNavigate();
@@ -20,6 +21,7 @@ export default function PabiliPage() {
   const [itemsList, setItemsList] = useState('');
   const [storeLocation, setStoreLocation] = useState('');
   const [deliveryAddress, setDeliveryAddress] = useState(user?.address || '');
+  const [addressCoordinates, setAddressCoordinates] = useState({ lat: null, lng: null });
   const [estimatedBudget, setEstimatedBudget] = useState('');
   const [paymentMethod, setPaymentMethod] = useState('cod');
   const [notes, setNotes] = useState('');
@@ -139,17 +141,12 @@ export default function PabiliPage() {
 
           {/* Delivery Address */}
           <div className="space-y-2">
-            <Label className="flex items-center gap-2">
-              <MapPin className="w-4 h-4 text-[#0284C7]" />
-              {t('deliveryAddress')} *
-            </Label>
-            <Textarea
-              placeholder="Your complete delivery address"
-              value={deliveryAddress}
-              onChange={(e) => setDeliveryAddress(e.target.value)}
-              className="resize-none rounded-xl"
-              rows={2}
-              data-testid="delivery-address-input"
+            <LocationPicker 
+              initialAddress={deliveryAddress} 
+              onChange={(loc) => {
+                setDeliveryAddress(loc.address);
+                setAddressCoordinates({ lat: loc.lat, lng: loc.lng });
+              }}
             />
           </div>
 

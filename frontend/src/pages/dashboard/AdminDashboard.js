@@ -422,6 +422,7 @@ export default function AdminDashboard() {
                       <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase">Order ID</th>
                       <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase">Customer</th>
                       <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase">Restaurant</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase">Rider</th>
                       <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase">Total</th>
                       <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase">Status</th>
                       <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase">Date</th>
@@ -429,7 +430,11 @@ export default function AdminDashboard() {
                   </thead>
                   <tbody className="divide-y divide-border">
                     {orders.slice(0, 50).map((order) => (
-                      <tr key={order.id} className="hover:bg-gray-50">
+                      <tr 
+                        key={order.id} 
+                        className="hover:bg-gray-50 cursor-pointer"
+                        onClick={() => navigate(`/orders/${order.id}`)}
+                      >
                         <td className="px-4 py-3">
                           <p className="font-mono text-sm">#{order.id.slice(0, 8)}</p>
                         </td>
@@ -437,6 +442,13 @@ export default function AdminDashboard() {
                           <p className="font-medium text-sm">{order.customer_name}</p>
                         </td>
                         <td className="px-4 py-3 text-sm">{order.restaurant_name}</td>
+                        <td className="px-4 py-3">
+                          {order.rider_name ? (
+                            <span className="font-medium text-sm text-[#007DFE]">{order.rider_name}</span>
+                          ) : (
+                            <span className="text-xs text-muted-foreground italic">Unassigned</span>
+                          )}
+                        </td>
                         <td className="px-4 py-3 font-medium">₱{order.total.toFixed(2)}</td>
                         <td className="px-4 py-3">
                           <span className={`px-2 py-1 rounded-full text-xs font-bold status-${order.order_status}`}>
