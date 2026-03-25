@@ -419,7 +419,64 @@ async def exchange_session(request: Request, response: Response):
     )
     
     # Get updated user
-    user = await db.users.find_one({"user_id": user_id}, {"_id": 0})
+    final_user = await db.users.find_one({"user_id": user_id}, {"_id": 0})
+    
+    return {"user": final_user, "session_token": session_token}
+
+otp_store = {}
+
+class OTPRequest(BaseModel):
+    phone: str
+    role: str = "customer"
+
+class OTPVerify(BaseModel):
+    phone: str
+    otp: str
+    name: Optional[str] = None
+    role: str = "customer"
+
+@api_router.post("/auth/send-otp")
+async def send_otp(request: OTPRequest):
+    """Simulate sending OTP"""
+    otp = "123456" # Simple mock OTP
+    otp_store[request.phone] = {"otp": otp, "expires": datetime.now() + timedelta(minutes=10)}
+    return {"message": f"OTP sent to {request.phone}", "otp": otp}
+
+@api_router.post("/auth/verify-otp")
+async def verify_otp(request: OTPVerify):
+    """Verify OTP and return session info"""
+    stored = otp_store.get(request.phone)
+    if not stored:
+        raise HTTPException(status_code=400, detail="OTP not found or expired")
+    
+    if stored["otp"] != request.otp:
+        raise HTTPException(status_code=400, detail="Invalid OTP")
+    
+    # Check if user exists
+    user = await db.users.find_one({"phone": request.phone}, {"_id": 0})
+    
+    if not user:
+        if not request.name:
+            raise HTTPException(status_code=400, detail="Name required for registration")
+        
+        user_id = f"user_{uuid.uuid4().hex[:12]}"
+        user = {
+            "user_id": user_id,
+            "phone": request.phone,
+            "name": request.name,
+            "role": request.role,
+            "created_at": datetime.now(timezone.utc).isoformat()
+        }
+        await db.users.insert_one(user)
+    
+    session_token = f"sess_{uuid.uuid4().hex}"
+    expires_at = datetime.now(timezone.utc) + timedelta(days=7)
+    await db.user_sessions.insert_one({
+        "id": str(uuid.uuid4()),
+        "user_id": user["user_id"],
+        "session_token": session_token,
+        "expires_at": expires_at.isoformat()
+    })
     
     return {"user": user, "session_token": session_token}
 
@@ -1121,6 +1178,41 @@ async def delete_promo(promo_id: str, user = Depends(get_current_user)):
     await db.promo_codes.delete_one({"id": promo_id})
     return {"message": "Deleted"}
 
+# ==================== PABILI ROUTES ====================
+
+@api_router.get("/pabili")
+async def get_pabili(user = Depends(get_current_user)):
+    """Get pabili requests"""
+    if user["role"] == "rider":
+        return await db.pabili.find({"$or": [{"status": "pending"}, {"rider_id": user["user_id"]}]}, {"_id": 0}).to_list(100)
+    return await db.pabili.find({"customer_id": user["user_id"]}, {"_id": 0}).to_list(100)
+
+@api_router.post("/pabili")
+async def create_pabili(request: PabiliRequest, user = Depends(get_current_user)):
+    """Create a pabili request"""
+    request.customer_id = user["user_id"]
+    request.customer_name = user["name"]
+    request.customer_email = user["email"]
+    doc = request.model_dump()
+    doc["created_at"] = doc["created_at"].isoformat()
+    doc["updated_at"] = doc["updated_at"].isoformat()
+    await db.pabili.insert_one(doc)
+    return request
+
+@api_router.post("/pabili/{request_id}/accept")
+async def accept_pabili(request_id: str, user = Depends(get_current_user)):
+    """Accept a pabili request (rider)"""
+    if user["role"] != "rider":
+        raise HTTPException(status_code=403, detail="Only riders can accept requests")
+    
+    res = await db.pabili.update_one(
+        {"id": request_id, "status": "pending"},
+        {"$set": {"rider_id": user["user_id"], "rider_name": user["name"], "status": "accepted", "updated_at": datetime.now(timezone.utc).isoformat()}}
+    )
+    if res.modified_count == 0:
+        raise HTTPException(status_code=400, detail="Request unavailable or already accepted")
+    return {"message": "Accepted"}
+
 # ==================== CATEGORIES ====================
 
 @api_router.get("/categories")
@@ -1211,6 +1303,49 @@ async def seed_data():
     if menu_items:
         await db.menu_items.insert_many(menu_items)
     
+    # Create plenty of random stores
+    import random
+    cuisines = ["Filipino", "Fast Food", "Chinese", "Korean", "Pizza", "Desserts", "Beverages"]
+    extra_restaurants = []
+    
+    # 50 stores as requested
+    for i in range(50):
+        name = f"Store {i+1} - {random.choice(['Kitchen', 'Hub', 'Diner', 'Place', 'Corner', 'Station'])}"
+        cuisine = random.choice(cuisines)
+        res = Restaurant(
+            owner_id="system",
+            name=name,
+            description=f"Freshly prepared {cuisine} dishes in Urdaneta.",
+            cuisine_type=cuisine,
+            address=f"Phase {random.randint(1,5)}, Urdaneta City",
+            image_url=f"https://picsum.photos/seed/{i+1}/400/300",
+            is_approved=True,
+            rating=round(random.uniform(3.5, 5.0), 1)
+        )
+        res_doc = res.model_dump()
+        res_doc["created_at"] = res_doc["created_at"].isoformat()
+        extra_restaurants.append(res_doc)
+        
+    await db.restaurants.insert_many(extra_restaurants)
+    
+    # Add random menu items for each new restaurant
+    all_menu_items = []
+    for r in extra_restaurants:
+        for j in range(random.randint(3, 8)):
+            item = MenuItem(
+                restaurant_id=r["id"],
+                name=f"Popular Dish {j+1}",
+                description=f"Delicious choice from {r['name']}",
+                price=random.uniform(50.0, 300.0),
+                category=random.choice(["Main", "Sides", "Drinks"])
+            )
+            item_doc = item.model_dump()
+            item_doc["created_at"] = item_doc["created_at"].isoformat()
+            all_menu_items.append(item_doc)
+    
+    if all_menu_items:
+        await db.menu_items.insert_many(all_menu_items)
+
     # Add promo codes
     promos = [
         {"id": str(uuid.uuid4()), "code": "WELCOME50", "description": "50% off first order (max ₱100)",
@@ -1226,30 +1361,54 @@ async def seed_data():
     ]
     await db.promo_codes.insert_many(promos)
     
-    # Add sample riders
-    riders = [
-        {"id": str(uuid.uuid4()), "user_id": "rider_sample_1", "vehicle_type": "motorcycle",
-         "plate_number": "ABC 1234", "is_online": True, "is_on_delivery": False,
-         "current_lat": 15.9780, "current_lng": 120.5700, "total_deliveries": 45, "total_earnings": 2250.0,
-         "rating": 4.8, "created_at": datetime.now(timezone.utc).isoformat()},
-        {"id": str(uuid.uuid4()), "user_id": "rider_sample_2", "vehicle_type": "tricycle",
-         "plate_number": "XYZ 5678", "is_online": True, "is_on_delivery": True,
-         "current_lat": 15.9750, "current_lng": 120.5730, "total_deliveries": 32, "total_earnings": 1600.0,
-         "rating": 4.5, "created_at": datetime.now(timezone.utc).isoformat()},
-        {"id": str(uuid.uuid4()), "user_id": "rider_sample_3", "vehicle_type": "motorcycle",
-         "plate_number": "DEF 9012", "is_online": False, "is_on_delivery": False,
-         "current_lat": 15.9800, "current_lng": 120.5680, "total_deliveries": 78, "total_earnings": 3900.0,
-         "rating": 4.9, "created_at": datetime.now(timezone.utc).isoformat()},
-    ]
+    # 25 riders as requested
+    riders = []
+    for i in range(25):
+        riders.append({
+            "id": str(uuid.uuid4()), 
+            "user_id": f"rider_mock_{i+1}", 
+            "vehicle_type": random.choice(["motorcycle", "bicycle", "tricycle"]),
+            "plate_number": f"ABC {random.randint(1000, 9999)}", 
+            "is_online": True, 
+            "is_on_delivery": False,
+            "current_lat": 15.976 + random.uniform(-0.02, 0.02), 
+            "current_lng": 120.571 + random.uniform(-0.02, 0.02), 
+            "total_deliveries": random.randint(10, 100), 
+            "total_earnings": random.uniform(500, 5000),
+            "rating": round(random.uniform(4.0, 5.0), 1), 
+            "created_at": datetime.now(timezone.utc).isoformat()
+        })
     await db.rider_profiles.insert_many(riders)
     
-    return {"message": "Data seeded", "restaurants": len(restaurants), "promos": len(promos), "riders": len(riders)}
+    return {"message": "Deeper seed data inserted", "restaurants": len(extra_restaurants), "promos": len(promos), "riders": len(riders)}
 
 # ==================== HEALTH CHECK ====================
 
 @api_router.get("/")
 async def root():
     return {"message": "KainTayo - The Sync Dashboard API", "version": "2.0.0"}
+
+@api_router.post("/simulate/pabili")
+async def simulate_pabili(user = Depends(get_current_user)):
+    """Injected ghost pabili request for testing"""
+    customer_names = ["Juan Dela Cruz", "Maria Clara", "Jose Rizal", "Andres Bonifacio", "Emilio Aguinaldo"]
+    import random
+    request = PabiliRequest(
+        customer_id=f"ghost_{uuid.uuid4().hex[:8]}",
+        customer_name=random.choice(customer_names),
+        customer_email="ghost@example.com",
+        items_list="2kg Rice, 1L Cooking Oil, 1 pack Eggs",
+        store_location="Public Market",
+        delivery_address="Urdaneta City Proper",
+        estimated_budget=500.0,
+        payment_method="cash",
+        status="pending"
+    )
+    doc = request.model_dump()
+    doc["created_at"] = doc["created_at"].isoformat()
+    doc["updated_at"] = doc["updated_at"].isoformat()
+    await db.pabili.insert_one(doc)
+    return request
 
 @api_router.get("/health")
 async def health_check():
