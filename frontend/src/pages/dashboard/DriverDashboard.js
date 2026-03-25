@@ -23,7 +23,8 @@ export default function DriverDashboard() {
 
   useEffect(() => {
     loadData();
-    const interval = setInterval(loadDeliveries, 15000);
+    // Faster polling for demo (5 seconds)
+    const interval = setInterval(loadDeliveries, 5000);
     return () => clearInterval(interval);
   }, []);
 
@@ -107,6 +108,21 @@ export default function DriverDashboard() {
       toast.success(`Status updated`);
     } catch (error) {
       toast.error('Failed to update status');
+    }
+  };
+
+  const simulatePabili = async () => {
+    try {
+      toast.promise(axios.post(`${API}/simulate/pabili`), {
+        loading: 'Injecting ghost pabili request...',
+        success: (res) => {
+          loadDeliveries();
+          return `New pabili request from ${res.data.customer_name}!`;
+        },
+        error: 'Failed to inject request'
+      });
+    } catch (error) {
+      console.error('Simulation failed:', error);
     }
   };
 
@@ -241,6 +257,16 @@ export default function DriverDashboard() {
         {/* Deliveries Tab */}
         {activeTab === 'deliveries' && (
           <div className="space-y-6">
+            <div className="flex items-center justify-between">
+              <h2 className="text-xl font-bold">Available Jobs</h2>
+              <Button 
+                onClick={simulatePabili}
+                variant="outline"
+                className="border-dashed border-[#FF6B00] text-[#FF6B00] hover:bg-[#FF6B00]/5"
+              >
+                📦 Request Ghost Pabili
+              </Button>
+            </div>
             {/* My Active Deliveries */}
             {myOrders.length > 0 && (
               <div>

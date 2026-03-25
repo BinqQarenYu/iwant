@@ -3,6 +3,7 @@ import "@/App.css";
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { AppProvider, useApp } from "./contexts/AppContext";
 import { Toaster } from "./components/ui/sonner";
+import SimHUD from './components/SimHUD';
 
 // Pages
 import HomePage from "./pages/HomePage";
@@ -148,8 +149,9 @@ function App() {
       <AppProvider>
         <BrowserRouter>
           <AppRouter />
+          <Toaster position="top-center" richColors />
+          <SimHUD />
         </BrowserRouter>
-        <Toaster position="top-center" richColors />
       </AppProvider>
     </div>
   );
