@@ -1,0 +1,3 @@
+## 2024-03-05 - Debounced API Calls on Key Presses
+**Learning:** Found a common React performance anti-pattern in `frontend/src/pages/HomePage.js`. The search input's raw state (`searchQuery`) was tied directly to an effect making API calls (`loadRestaurants()`). This means every single keystroke triggers an immediate HTTP request, leading to network spam and potential UI stuttering.
+**Action:** Always implement debouncing (e.g., using a delayed duplicate state `debouncedSearchQuery` and a 300ms `setTimeout`) when filtering external data sources via text input. This drastically reduces unnecessary network overhead.
