@@ -31,6 +31,8 @@ export default function HomePage() {
   const [categories, setCategories] = useState([]);
   const [selectedCategory, setSelectedCategory] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
+  // ⚡ Bolt: Debounce search input to prevent API calls on every keystroke
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
   const [loading, setLoading] = useState(true);
   const [showLocationModal, setShowLocationModal] = useState(false);
   const [selectedLocation, setSelectedLocation] = useState({
@@ -43,9 +45,17 @@ export default function HomePage() {
     loadData();
   }, []);
 
+  // ⚡ Bolt: Update debounced state after 300ms of inactivity
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearchQuery(searchQuery);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
   useEffect(() => {
     loadRestaurants();
-  }, [selectedCategory, searchQuery, selectedArea]);
+  }, [selectedCategory, debouncedSearchQuery, selectedArea]);
 
   const loadData = async () => {
     try {
@@ -69,7 +79,7 @@ export default function HomePage() {
     try {
       const params = {};
       if (selectedCategory) params.cuisine = selectedCategory;
-      if (searchQuery) params.search = searchQuery;
+      if (debouncedSearchQuery) params.search = debouncedSearchQuery;
       const response = await axios.get(`${API}/restaurants`, { params });
       
       let filtered = response.data;
