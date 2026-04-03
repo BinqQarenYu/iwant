@@ -1,0 +1,3 @@
+## 2024-05-15 - [N+1 Query Bottleneck in FastAPI/Motor Riders List]
+**Learning:** In the `/riders/all` endpoint, the logic previously iterated through up to 500 rider documents and made a separate `db.users.find_one()` query for each to enrich their profiles. This created a classic N+1 query problem, slowing down response times and increasing the database load significantly.
+**Action:** Always batch related lookups into a single `$in` query (`await db.collection.find({"field": {"$in": ids_list}}).to_list(None)`) and map the results in memory when enriching multiple documents instead of looping through them individually.

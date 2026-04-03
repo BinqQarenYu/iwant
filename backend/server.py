@@ -923,10 +923,23 @@ async def get_all_riders(user = Depends(get_current_user)):
     
     riders = await db.rider_profiles.find({}, {"_id": 0}).to_list(500)
     
-    # Enrich with user data
+    # ⚡ Bolt Performance Optimization: Fix N+1 query problem
+    # Why: The original loop made a separate db.users.find_one() query for each rider (up to 500 queries).
+    # Impact: Reduces database queries from N+1 to 2, significantly improving response time and lowering DB load.
+
+    # Extract all user IDs
+    user_ids = [rider["user_id"] for rider in riders]
+
+    # Fetch all corresponding users in a single query
+    users = await db.users.find({"user_id": {"$in": user_ids}}, {"_id": 0}).to_list(None)
+
+    # Create a lookup map in memory (O(N) lookup)
+    users_map = {user["user_id"]: user for user in users}
+
+    # Enrich with user data using the memory map
     enriched_riders = []
     for rider in riders:
-        rider_user = await db.users.find_one({"user_id": rider["user_id"]}, {"_id": 0})
+        rider_user = users_map.get(rider["user_id"])
         if rider_user:
             enriched_riders.append({
                 **rider,
