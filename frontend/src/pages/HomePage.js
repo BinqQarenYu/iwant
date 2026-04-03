@@ -39,13 +39,26 @@ export default function HomePage() {
   });
   const [selectedArea, setSelectedArea] = useState('all');
 
+  // ⚡ Bolt Performance Optimization: Debounce search input
+  // Why: Prevents excessive API calls on every keystroke when user types in the search bar
+  // Impact: Reduces backend load and improves UI responsiveness during typing
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearchQuery(searchQuery);
+    }, 300); // 300ms delay
+
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
   useEffect(() => {
     loadData();
   }, []);
 
   useEffect(() => {
     loadRestaurants();
-  }, [selectedCategory, searchQuery, selectedArea]);
+  }, [selectedCategory, debouncedSearchQuery, selectedArea]);
 
   const loadData = async () => {
     try {
@@ -69,7 +82,7 @@ export default function HomePage() {
     try {
       const params = {};
       if (selectedCategory) params.cuisine = selectedCategory;
-      if (searchQuery) params.search = searchQuery;
+      if (debouncedSearchQuery) params.search = debouncedSearchQuery; // Use debounced query for API call
       const response = await axios.get(`${API}/restaurants`, { params });
       
       let filtered = response.data;
