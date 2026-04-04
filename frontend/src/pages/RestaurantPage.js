@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { useApp } from '../contexts/AppContext';
@@ -52,14 +52,18 @@ export default function RestaurantPage() {
     setSpecialInstructions('');
   };
 
-  // Group menu items by category
-  const menuByCategory = menu.reduce((acc, item) => {
-    if (!acc[item.category]) {
-      acc[item.category] = [];
-    }
-    acc[item.category].push(item);
-    return acc;
-  }, {});
+  // ⚡ Bolt Performance Optimization: Memoize menu categorization
+  // Why: Prevents expensive O(N) array reduction on every component re-render (e.g. when changing quantities)
+  // Impact: Reduces CPU cycle overhead and ensures smoother UI updates
+  const menuByCategory = useMemo(() => {
+    return menu.reduce((acc, item) => {
+      if (!acc[item.category]) {
+        acc[item.category] = [];
+      }
+      acc[item.category].push(item);
+      return acc;
+    }, {});
+  }, [menu]);
 
   const cartCount = getCartItemCount();
 
