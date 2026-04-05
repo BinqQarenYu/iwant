@@ -1013,28 +1013,43 @@ async def update_pabili_status(pabili_id: str, status: str, user = Depends(get_c
 
 # ==================== ADMIN / OPS CENTER ====================
 
+import asyncio
+
 @api_router.get("/admin/analytics")
 async def get_analytics(user = Depends(get_current_user)):
     """Get platform analytics"""
     if user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
     
-    total_users = await db.users.count_documents({})
-    total_restaurants = await db.restaurants.count_documents({})
-    total_orders = await db.orders.count_documents({})
-    total_riders = await db.rider_profiles.count_documents({})
-    online_riders = await db.rider_profiles.count_documents({"is_online": True})
-    busy_riders = await db.rider_profiles.count_documents({"is_on_delivery": True})
+    # ⚡ Bolt Performance Optimization:
+    # 1. Calculate revenue in DB instead of pulling 10,000 documents into app memory
+    # 2. Execute all 12 independent database queries concurrently using asyncio.gather
+    # Expected Impact: Drastically reduces DB roundtrip latency from ~12x to 1x,
+    # and prevents out-of-memory errors on large datasets.
+
+    results = await asyncio.gather(
+        db.users.count_documents({}),
+        db.restaurants.count_documents({}),
+        db.orders.count_documents({}),
+        db.rider_profiles.count_documents({}),
+        db.rider_profiles.count_documents({"is_online": True}),
+        db.rider_profiles.count_documents({"is_on_delivery": True}),
+        db.orders.count_documents({"order_status": "pending"}),
+        db.orders.count_documents({"order_status": {"$in": ["confirmed", "preparing"]}}),
+        db.orders.count_documents({"order_status": "ready"}),
+        db.orders.count_documents({"order_status": "picked_up"}),
+        db.orders.count_documents({"order_status": "delivered"}),
+        db.orders.aggregate([
+            {"$match": {"order_status": "delivered"}},
+            {"$group": {"_id": None, "total": {"$sum": "$total"}}}
+        ]).to_list(1)
+    )
     
-    orders_pending = await db.orders.count_documents({"order_status": "pending"})
-    orders_preparing = await db.orders.count_documents({"order_status": {"$in": ["confirmed", "preparing"]}})
-    orders_ready = await db.orders.count_documents({"order_status": "ready"})
-    orders_in_transit = await db.orders.count_documents({"order_status": "picked_up"})
-    orders_delivered = await db.orders.count_documents({"order_status": "delivered"})
+    (total_users, total_restaurants, total_orders, total_riders,
+     online_riders, busy_riders, orders_pending, orders_preparing,
+     orders_ready, orders_in_transit, orders_delivered, revenue_result) = results
     
-    # Revenue
-    delivered_orders = await db.orders.find({"order_status": "delivered"}, {"_id": 0, "total": 1}).to_list(10000)
-    total_revenue = sum(o.get("total", 0) for o in delivered_orders)
+    total_revenue = revenue_result[0]["total"] if revenue_result else 0
     
     return {
         "total_users": total_users,
