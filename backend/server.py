@@ -921,19 +921,40 @@ async def get_all_riders(user = Depends(get_current_user)):
     if user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
     
-    riders = await db.rider_profiles.find({}, {"_id": 0}).to_list(500)
+    # ⚡ Bolt Performance Optimization: Replace N+1 queries with single aggregation
+    # Why: Offloads join to database instead of doing 500+ find_one() calls
+    # Impact: Reduces query count from O(N) to O(1), massive speedup for large datasets
+    pipeline = [
+        {
+            "$lookup": {
+                "from": "users",
+                "localField": "user_id",
+                "foreignField": "user_id",
+                "as": "user_info"
+            }
+        },
+        {
+            "$unwind": {
+                "path": "$user_info",
+                "preserveNullAndEmptyArrays": False
+            }
+        },
+        {
+            "$addFields": {
+                "name": "$user_info.name",
+                "email": "$user_info.email",
+                "phone": "$user_info.phone"
+            }
+        },
+        {
+            "$project": {
+                "_id": 0,
+                "user_info": 0
+            }
+        }
+    ]
     
-    # Enrich with user data
-    enriched_riders = []
-    for rider in riders:
-        rider_user = await db.users.find_one({"user_id": rider["user_id"]}, {"_id": 0})
-        if rider_user:
-            enriched_riders.append({
-                **rider,
-                "name": rider_user.get("name"),
-                "email": rider_user.get("email"),
-                "phone": rider_user.get("phone")
-            })
+    enriched_riders = await db.rider_profiles.aggregate(pipeline).to_list(500)
     
     return enriched_riders
 
