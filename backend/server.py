@@ -1033,8 +1033,14 @@ async def get_analytics(user = Depends(get_current_user)):
     orders_delivered = await db.orders.count_documents({"order_status": "delivered"})
     
     # Revenue
-    delivered_orders = await db.orders.find({"order_status": "delivered"}, {"_id": 0, "total": 1}).to_list(10000)
-    total_revenue = sum(o.get("total", 0) for o in delivered_orders)
+    # ⚡ Bolt Optimization: Use DB aggregation instead of loading thousands of documents into memory.
+    # Calculates total revenue directly in MongoDB, avoiding Python memory overhead and O(n) loop.
+    pipeline = [
+        {"$match": {"order_status": "delivered"}},
+        {"$group": {"_id": None, "total_revenue": {"$sum": "$total"}}}
+    ]
+    revenue_result = await db.orders.aggregate(pipeline).to_list(1)
+    total_revenue = revenue_result[0]["total_revenue"] if revenue_result else 0
     
     return {
         "total_users": total_users,
