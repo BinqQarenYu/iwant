@@ -1,0 +1,3 @@
+## 2024-04-07 - [MongoDB Aggregation for Memory Optimization]
+**Learning:** In the FastAPI backend using `motor` (AsyncIOMotorClient), operations like calculating `total_revenue` initially loaded large arrays of documents into application memory using `.to_list(10000)` and calculated the sum in Python. This causes high memory consumption and synchronous processing bottlenecks on large data sets (O(n) operations in memory).
+**Action:** Always prefer offloading large data computations (like `$sum` or counts) to the database layer via MongoDB aggregation pipelines (`$match` and `$group`). This avoids pulling huge document sets over the network and into memory.
