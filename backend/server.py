@@ -1033,8 +1033,15 @@ async def get_analytics(user = Depends(get_current_user)):
     orders_delivered = await db.orders.count_documents({"order_status": "delivered"})
     
     # Revenue
-    delivered_orders = await db.orders.find({"order_status": "delivered"}, {"_id": 0, "total": 1}).to_list(10000)
-    total_revenue = sum(o.get("total", 0) for o in delivered_orders)
+    # ⚡ Bolt Performance Optimization: Offload revenue aggregation to the database
+    # Why: Replaces in-memory array loading (which could hit 10k limit and OOM) with efficient DB sum
+    # Impact: O(1) memory usage in application, faster response time, avoids 10,000 document fetch limit
+    pipeline = [
+        {"$match": {"order_status": "delivered"}},
+        {"$group": {"_id": None, "total_revenue": {"$sum": "$total"}}}
+    ]
+    revenue_result = await db.orders.aggregate(pipeline).to_list(1)
+    total_revenue = revenue_result[0]["total_revenue"] if revenue_result else 0.0
     
     return {
         "total_users": total_users,
