@@ -1,0 +1,3 @@
+## 2024-04-08 - Use DB Aggregations instead of Memory Summation
+**Learning:** The FastAPI backend uses the `motor` library (`AsyncIOMotorClient`) for MongoDB. It is inefficient and dangerous to use `db.collection.find().to_list(10000)` to pull all documents into memory just to run Python operations like `sum()`. This pattern risks application OOM errors and truncation of correct calculations when data exceeds the `.to_list()` limit.
+**Action:** Always prefer using asynchronous MongoDB aggregation pipelines (e.g. `$group` and `$sum`) offloaded to the database to compute aggregates with O(1) application memory usage.
